@@ -1,4 +1,4 @@
-# reactive-shipping
+# warehouse shipping / using inter-process-communication(IPC)
 
 designed to ship packages to customer using multiple processors
 
@@ -8,9 +8,12 @@ designed to ship packages to customer using multiple processors
 
 ```
 $ lein run inline < input-events > output-events
+```
 
-;; or 
 
+or
+
+```
 $ lein run async < input-events
 (async)
 package-1 shipped
@@ -30,9 +33,6 @@ package-16 shipped
 ...
 ```
 
-## License
-
-Copyright © Prayag
 
 ##  References
 

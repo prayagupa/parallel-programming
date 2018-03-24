@@ -25,18 +25,18 @@
   [num-consumers]
   (dotimes [_ num-consumers]
     (async/thread
-      (while true
-        (let [package (async/<!! in-chan)
-              data (ship-it package)]
-          (async/>!! out-chan data))))))
+     (while true
+       (let [package (async/<!! in-chan)
+             data    (ship-it package)]
+         (async/>!! out-chan data))))))
 
 (defn shipping-aggregator
   "Take items from the out-chan and print it."
   []
   (async/thread
-    (while true
-      (let [data (async/<!! out-chan)]
-        (println data)))))
+   (while true
+     (let [data (async/<!! out-chan)]
+       (println data)))))
 
 (defn read-and-ship [input-events]
   (do

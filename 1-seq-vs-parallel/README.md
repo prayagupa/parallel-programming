@@ -140,8 +140,54 @@ $ sbt "runMain SequentialTasksExecution"
 
 ![](sequential.png)
 
-Parallel
---------
+Parallel/Non-Blocking
+---------------------
+
+- By default, futures and promises are non-blocking,
+making use of callbacks instead of typical blocking operations.
+- Scala provides combinators such as `flatMap`, `foreach`, and `filter` used to compose futures in a non-blocking way.
+
+ExecutionContext
+----------------
+
+By default the ExecutionContext.global sets the parallelism level of its
+underlying fork-join pool to the amount of available processors
+
+ForkJoinPool can increase the amount of threads beyond its parallelismLevel
+in the presence of blocking computation.
+
+Let’s assume that we want to use a order API of some retail company
+to obtain a list of orders for a given user.
+
+```scala
+import scala.concurrent._
+import ExecutionContext.Implicits.global
+
+val session = orderApi.createSession("user-001@duwamish.com", "password")
+
+val f: Future[List[Order]] = Future {
+  session.getOrders()
+}
+```
+
+To better utilize the CPU until the response arrives, we should not
+block the rest of the program– this computation should be scheduled
+asynchronously.
+
+The `Future.apply` method does exactly that– it performs
+the specified computation block concurrently, in this case sending a
+request to the server and waiting for a response.
+
+
+Callbacks
+---------
+
+from a performance point of view a better way to do it is in a
+completely non-blocking way, by registering a callback on the future.
+
+This callback is called asynchronously once the future is completed.
+
+The `andThen` combinator is used purely for side-effecting purposes.
 
 - number of process = 10
 - each process takes = 1 secs
@@ -383,3 +429,7 @@ $ sbt "runMain ParallelTasksWithGlobalExecutionContext"
 ```
 
 ![](parallel.png)
+
+Promises
+--------
+

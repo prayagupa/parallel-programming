@@ -3,3 +3,5 @@
 
 ![](https://edux.pjwstk.edu.pl/mat/264/lec/ark16/Image8182.gif)
 
+
+https://docs.scala-lang.org/overviews/core/futures.html#the-global-execution-context

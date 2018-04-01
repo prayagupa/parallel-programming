@@ -1,11 +1,26 @@
 import java.util.concurrent.Executors
 
+import SequentialTasksExecution.Input
+
 import scala.concurrent.{ExecutionContext, ExecutionContextExecutorService, Future}
 import scala.util.{Failure, Success}
 
 object ParallelTasksWithCustomExecutionContext {
 
-  private val data: Iterable[Input] = Iterable("data1", "data2", "data3")
+
+  private val data: Iterable[Input] = Iterable(
+    "data1",
+    "data2",
+    "data3",
+    "data4",
+    "data5",
+    "data6",
+    "data7",
+    "data8",
+    "data9",
+    "data10"
+  )
+
   implicit val singleThreadContext: ExecutionContextExecutorService = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(3))
 
   def main(args: Array[String]): Unit = {
@@ -18,10 +33,10 @@ object ParallelTasksWithCustomExecutionContext {
     } onComplete {
       case Success(processed) =>
         processed.foreach(p => println(s"""[${Thread.currentThread().getName}]-$p"""))
-        //singleThreadContext.shutdown()
+        singleThreadContext.shutdown()
       case Failure(f) =>
         f.printStackTrace()
-        //singleThreadContext.shutdown()
+        singleThreadContext.shutdown()
     }
 
   }

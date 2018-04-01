@@ -4,7 +4,18 @@ import scala.concurrent.{Await, Future}
 
 object ParallelTasksWithGlobalExecutionContext {
 
-  private val data: Iterable[Input] = Iterable("data1", "data2", "data3")
+  private val data: Iterable[Input] = Iterable(
+    "data1",
+    "data2",
+    "data3",
+    "data4",
+    "data5",
+    "data6",
+    "data7",
+    "data8",
+    "data9",
+    "data10"
+  )
 
   def main(args: Array[String]): Unit = {
 
@@ -25,7 +36,7 @@ object ParallelTasksWithGlobalExecutionContext {
 
   def processData: (Input => Future[Output]) = data => {
     Future {
-      Thread.sleep(5000)
+      Thread.sleep(1000)
       s"[Thread-${Thread.currentThread().getName}] data $data is processed."
     }
   }

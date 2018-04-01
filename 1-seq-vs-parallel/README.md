@@ -29,6 +29,8 @@ $ sbt "runMain SequentialTasksExecution"
 [success] Total time: 11 s, completed Apr 1, 2018 2:07:22 AM
 ```
 
+![](sequential.png)
+
 Parallel
 --------
 
@@ -62,3 +64,4 @@ $ sbt "runMain ParallelTasksWithGlobalExecutionContext"
 [success] Total time: 3 s, completed Apr 1, 2018 2:09:07 AM
 ```
 
+![](parallel.png)

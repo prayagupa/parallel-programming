@@ -11,14 +11,14 @@ import java.util.concurrent.ForkJoinPool.commonPool
 
 class DistributionMachine {
 
-    fun process(array: IntArray): Long {
-        return commonPool()
-                .invoke(DistributedSum(array, 0, array.size))
+    fun process(array: Array<Int>): Long {
+        println("""[${Thread.currentThread().name}]""")
+        return commonPool().invoke(DistributedSumTask(array, 0, array.size))
     }
 
 }
 
-internal class DistributedSum(var sharedArray: IntArray, var lowIndexState: Int, var highIndexState: Int) : RecursiveTask<Long>() {
+internal class DistributedSumTask(var sharedArray: Array<Int>, var lowIndexState: Int, var highIndexState: Int) : RecursiveTask<Long>() {
 
     /**
      * How does this code work?
@@ -30,10 +30,12 @@ internal class DistributedSum(var sharedArray: IntArray, var lowIndexState: Int,
      */
     override fun compute(): Long? {
 
+        Thread.sleep(1000)
+
+        //doItSequentially
         if (differenceOfHighToLow(highIndexState, lowIndexState) <= SEQUENTIAL_THRESHOLD) {
-            //doItSequentially
             var sum: Long = 0
-            for (i in lowIndexState..highIndexState - 1)
+            for (i in lowIndexState until highIndexState)
                 sum += sharedArray[i].toLong()
             return sum
         } else {
@@ -46,14 +48,15 @@ internal class DistributedSum(var sharedArray: IntArray, var lowIndexState: Int,
             // To get the answer for the left, it calls leftNode.join().
             //
             val midIndex = lowIndexState + (highIndexState - lowIndexState) / 2
-            println("creating new process for ([$lowIndexState-$midIndex] [$midIndex-$highIndexState])")
-            val leftNode = DistributedSum(sharedArray, lowIndexState, midIndex)
-            val rightNode = DistributedSum(sharedArray, midIndex, highIndexState)
+            println("""[${Thread.currentThread().name}] creating new process for ([$lowIndexState-$midIndex] [$midIndex-$highIndexState])""")
 
-            leftNode.fork() //Arranges to asynch'ly execute this task in the pool
+            val leftNodeTask = DistributedSumTask(sharedArray, lowIndexState, midIndex)
+            val rightNodeTask = DistributedSumTask(sharedArray, midIndex, highIndexState)
 
-            val rightSum = rightNode.compute()!! //get the right result
-            val leftSum = leftNode.join() //get the left result
+            leftNodeTask.fork() //Arranges to asynch'ly execute this task in the pool
+
+            val rightSum = rightNodeTask.compute()!! //get the right result
+            val leftSum = leftNodeTask.join() //get the left result
 
             return leftSum + rightSum
         }
@@ -65,6 +68,6 @@ internal class DistributedSum(var sharedArray: IntArray, var lowIndexState: Int,
 
     companion object {
         //2.1.2 Process Granularity
-        val SEQUENTIAL_THRESHOLD = 500
+        const val SEQUENTIAL_THRESHOLD = 100
     }
 }

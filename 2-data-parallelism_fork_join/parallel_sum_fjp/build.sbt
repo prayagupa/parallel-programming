@@ -1,8 +1,8 @@
-name := "ParallelProgramming"
+name := "parallel-sum-fjp"
 
 version := "1.0"
 
-scalaVersion := "2.12.4"
+scalaVersion := "2.12.5"
 
 libraryDependencies += "org.scala-lang" % "scala-library" % "2.12.4"
 libraryDependencies += "org.scalatest" % "scalatest_2.12" % "3.0.0" % "test"

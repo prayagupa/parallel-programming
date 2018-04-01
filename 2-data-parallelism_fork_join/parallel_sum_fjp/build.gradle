@@ -3,6 +3,7 @@ version '1.0'
 
 apply plugin: 'kotlin'
 apply plugin: 'scala'
+apply plugin: 'application'
 
 repositories {
     maven {
@@ -44,3 +45,5 @@ sourceSets {
         }
     }
 }
+
+mainClassName = "data_parallelism.ParallelSumApplication"

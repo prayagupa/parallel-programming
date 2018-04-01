@@ -2,18 +2,7 @@
 
 object SequentialTasksExecution {
 
-  private val data: Iterable[Input] = Iterable(
-    "data1",
-    "data2",
-    "data3",
-    "data4",
-    "data5",
-    "data6",
-    "data7",
-    "data8",
-    "data9",
-    "data10"
-  )
+  private val data: Iterable[Input] = Range(1, 100).map(x => s"data-$x")
 
   def main(args: Array[String]): Unit = {
 

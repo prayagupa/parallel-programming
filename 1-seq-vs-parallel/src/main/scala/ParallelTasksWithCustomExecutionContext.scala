@@ -1,25 +1,11 @@
 import java.util.concurrent.Executors
 
-import SequentialTasksExecution.Input
-
 import scala.concurrent.{ExecutionContext, ExecutionContextExecutorService, Future}
 import scala.util.{Failure, Success}
 
 object ParallelTasksWithCustomExecutionContext {
 
-
-  private val data: Iterable[Input] = Iterable(
-    "data1",
-    "data2",
-    "data3",
-    "data4",
-    "data5",
-    "data6",
-    "data7",
-    "data8",
-    "data9",
-    "data10"
-  )
+  private val data: Iterable[Input] = Range(1, 100).map(x => s"data-$x")
 
   implicit val singleThreadContext: ExecutionContextExecutorService = ExecutionContext.fromExecutorService(Executors.newFixedThreadPool(3))
 

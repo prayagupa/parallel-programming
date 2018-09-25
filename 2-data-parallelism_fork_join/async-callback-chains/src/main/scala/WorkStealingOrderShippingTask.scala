@@ -1,17 +1,18 @@
 import java.util.UUID
-import java.util.concurrent.RecursiveAction
+import java.util.concurrent.{ForkJoinPool, ForkJoinTask, RecursiveAction, TimeUnit}
 
-import scala.concurrent.forkjoin.{ForkJoinPool, ForkJoinTask}
-import scala.collection.JavaConverters._
-import java.util.concurrent.TimeUnit
+import scala.collection.JavaConverters
 
+/**
+  * submit 100 tasks to a pool of threads 100
+  */
 object WorkStealingOrderShippingTask {
 
   private val forkJoinPool = new ForkJoinPool(100)
 
   def main(args: Array[String]): Unit = {
 
-    val orders = Seq.fill(100)(OrderReceived(UUID.randomUUID().toString))
+    val orders = List.fill(100)(OrderReceived(UUID.randomUUID().toString))
 
     val task = new WorkStealingOrderShippingTask(orders)
 
@@ -29,6 +30,10 @@ case class OrderReceived(id: String)
 
 case class OrderShipping(id: String)
 
+/**
+  * creates two sub tasks of work and
+  * computes them
+  */
 class WorkStealingOrderShippingTask(orders: Seq[OrderReceived]) extends RecursiveAction {
 
   private val NumberOfThreshold = 5
@@ -42,7 +47,7 @@ class WorkStealingOrderShippingTask(orders: Seq[OrderReceived]) extends Recursiv
       val task1 = new WorkStealingOrderShippingTask(orders.slice(0, mid))
       val task2 = new WorkStealingOrderShippingTask(orders.slice(mid, orders.length))
 
-      ForkJoinTask.invokeAll(Seq(task1, task2).asJava)
+      ForkJoinTask.invokeAll(JavaConverters.asJavaCollection(List(task1, task2)))
 
     } else {
       shipOrders(orders)
@@ -52,7 +57,7 @@ class WorkStealingOrderShippingTask(orders: Seq[OrderReceived]) extends Recursiv
   private def shipOrders(receiveds: Seq[OrderReceived]): Unit = {
     orders.foreach(o => {
       Thread.sleep(1000)
-      println(s"""[${Thread.currentThread().getName}] - shipping ${o.id}""")
+      println(s"""    [${Thread.currentThread().getName}] - shipping ${o.id}""")
     })
   }
 }

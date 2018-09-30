@@ -147,15 +147,18 @@ $ sbt "runMain SequentialSingleThreadedApp"
 
 ![](sequential.png)
 
-Parallel/Non-Blocking
----------------------
+Parallel (parallel with blocking threads or parallel with non-blocking threads)
+-----------------------------------------------------------------------------
 
 - By default, futures and promises are non-blocking,
 making use of callbacks instead of typical blocking operations.
 - Scala provides combinators such as `flatMap`, `foreach`, and `filter` used to compose futures in a non-blocking way.
 
-[`ThreadExecutor`](https://docs.oracle.com/javase/8/docs/api/java/util/concurrent/Executor.html) or `ExecutionContext` or [`Threadpool`](https://docs.rs/threadpool/1.7.1/threadpool/)
--------------------------------------------------------------------------------------------------------
+Q: Where do I get thread from?
+------------------------------
+
+A: [`ThreadExecutor`](https://docs.oracle.com/javase/8/docs/api/java/util/concurrent/Executor.html) or `ExecutionContext` or [`Threadpool`](https://docs.rs/threadpool/1.7.1/threadpool/)
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 By default the `ExecutionContext.global` sets the parallelism level of its
 underlying `fork-join` pool to the amount of available processors
@@ -200,17 +203,17 @@ This callback is called asynchronously once the future is completed.
 
 The `andThen` combinator is used purely for side-effecting purposes.
 
-- number of process = 10
+- number of process = [10 to 16]/ 8 CPUs
 - each process takes = 1 secs
-- total time = 3secs
+- total time = ~3secs (8 CPUs can take 8 tasks + rest of 2 tasks will wait till 2 CPUs are free + 1sec)
 
 on a machine with
 - 8 cores,
 - 4G heap size
 
 ```
-$ sbt "runMain ParallelTasksWithGlobalExecutionContext"
-[info] Running ParallelTasksWithGlobalExecutionContext
+$ sbt "runMain BlockingTasksWithGlobalExecutionContext"
+[info] Running BlockingTasksWithGlobalExecutionContext
 [run-main-0]-Firing data1
 [run-main-0]-Firing data2
 [run-main-0]-Firing data3
@@ -235,13 +238,14 @@ $ sbt "runMain ParallelTasksWithGlobalExecutionContext"
 ```
 
 for 100 tasks
+time taken should be = (100/CPUs) + ~1sec = 96 threads in 12 batches + 4 in another batch + 1 secs
 
 ```
-$ sbt "runMain ParallelTasksWithGlobalExecutionContext"
+$ sbt "runMain BlockingTasksWithGlobalExecutionContext"
 [info] Loading global plugins from /Users/a1353612/.sbt/0.13/plugins
 [info] Loading project definition from /Users/a1353612/buybest/sc212/parallel-programming/1-seq-vs-parallel/project
 [info] Set current project to seq-vs-parallel (in build file:/Users/a1353612/buybest/sc212/parallel-programming/1-seq-vs-parallel/)
-[info] Running ParallelTasksWithGlobalExecutionContext
+[info] Running BlockingTasksWithGlobalExecutionContext
 [run-main-0]-Firing data-1
 [run-main-0]-Firing data-2
 [run-main-0]-Firing data-3

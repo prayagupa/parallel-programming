@@ -154,14 +154,14 @@ Parallel/Non-Blocking
 making use of callbacks instead of typical blocking operations.
 - Scala provides combinators such as `flatMap`, `foreach`, and `filter` used to compose futures in a non-blocking way.
 
-ExecutionContext
-----------------
+[`ThreadExecutor`](https://docs.oracle.com/javase/8/docs/api/java/util/concurrent/Executor.html) or `ExecutionContext` or [`Threadpool`](https://docs.rs/threadpool/1.7.1/threadpool/)
+-------------------------------------------------------------------------------------------------------
 
-By default the ExecutionContext.global sets the parallelism level of its
-underlying fork-join pool to the amount of available processors
+By default the `ExecutionContext.global` sets the parallelism level of its
+underlying `fork-join` pool to the amount of available processors
 
-ForkJoinPool can increase the amount of threads beyond its parallelismLevel
-in the presence of blocking computation.
+`ForkJoinPool` can increase the amount of threads beyond its `parallelismLevel`
+only in the presence of blocking computation.
 
 Let’s assume that we want to use a order API of some retail company
 to obtain a list of orders for a given user.
@@ -177,13 +177,17 @@ val f: Future[List[Order]] = Future {
 }
 ```
 
-To better utilize the CPU until the response arrives, we should not
+Thread will be will be waiting till the response arrives from API,
+which means CPU is not doing any work during that time, so can be
+hired for uber driving in between.
+
+**To better utilize the CPU until the response arrives**, we should not
 block the rest of the program– this computation should be scheduled
 asynchronously.
 
 The `Future.apply` method does exactly that– it performs
 the specified computation block concurrently, in this case sending a
-request to the server and waiting for a response.
+request to the server (maybe HTTP) and waiting for a response.
 
 
 Callbacks

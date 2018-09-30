@@ -2,7 +2,7 @@ import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, Future}
 
-object ParallelTasksWithGlobalExecutionContext {
+object BlockingTasksWithGlobalExecutionContext {
 
   private val data: Iterable[Input] = Range(1, 100).map(x => s"data-$x")
 

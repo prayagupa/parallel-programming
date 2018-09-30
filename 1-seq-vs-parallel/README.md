@@ -11,13 +11,20 @@ https://docs.scala-lang.org/overviews/core/futures.html#the-global-execution-con
 Sequential
 ----------
 
+All the operations are handled by single thread (see in jmc or jvisualvm)
+
+```
+Thread Name	Thread State	Blocked Count	Blocked Time	Waited Count	Waited Time	Total CPU Usage(%)	Deadlocked	Lock Name	Lock Owner ID	Lock Owner Name	Thread Id	Native	Suspended	Allocated Bytes(bytes)
+run-main-0	TIMED_WAITING	3		66		-45,623,600	Not Enabled				60	0	0	-256,236
+```
+
 - number of process = 10
 - each process takes = 1 secs
 - total time = 11 secs
 
 ```
-$ sbt "runMain SequentialTasksExecution"
-[info] Running SequentialTasksExecution
+$ sbt "runMain SequentialSingleThreadedApp"
+[info] Running SequentialSingleThreadedApp
 [Thread-run-main-0] data data1 is processed.
 [Thread-run-main-0] data data2 is processed.
 [Thread-run-main-0] data data3 is processed.
@@ -34,8 +41,8 @@ $ sbt "runMain SequentialTasksExecution"
 for 100 tasks,
 
 ```
-$ sbt "runMain SequentialTasksExecution"
-[info] Running SequentialTasksExecution
+$ sbt "runMain SequentialSingleThreadedApp"
+[info] Running SequentialSingleThreadedApp
 [Thread-run-main-0] data data-1 is processed.
 [Thread-run-main-0] data data-2 is processed.
 [Thread-run-main-0] data data-3 is processed.
@@ -192,6 +199,10 @@ The `andThen` combinator is used purely for side-effecting purposes.
 - number of process = 10
 - each process takes = 1 secs
 - total time = 3secs
+
+on a machine with
+- 8 cores,
+- 4G heap size
 
 ```
 $ sbt "runMain ParallelTasksWithGlobalExecutionContext"

@@ -1,5 +1,6 @@
 import java.util.concurrent.{Executors, TimeUnit}
 
+import io.AsyncTask
 import org.scalatest.FunSuite
 
 import scala.concurrent.ExecutionContext.Implicits
@@ -13,7 +14,7 @@ class AsyncTaskSpecs extends FunSuite {
 
   test("assert async value") {
 
-    val response = task.process("led-zeppelin")(executionContext)
+    val response = task.timedBlockingOperation("led-zeppelin")(executionContext)
 
     executionContext.shutdown()
     executionContext.awaitTermination(6000, TimeUnit.MILLISECONDS)

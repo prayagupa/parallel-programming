@@ -1,3 +1,5 @@
+package io
+
 import scala.concurrent.{ExecutionContext, Future}
 
 
@@ -9,7 +11,7 @@ class AsyncTask {
 
   val database = new Database
 
-  def process(data: String)(implicit executionContext: ExecutionContext): Future[String] = {
+  def timedBlockingOperation(data: String)(implicit executionContext: ExecutionContext): Future[String] = {
     Future.apply({
       Thread.sleep(2000)
       database.insert(data)

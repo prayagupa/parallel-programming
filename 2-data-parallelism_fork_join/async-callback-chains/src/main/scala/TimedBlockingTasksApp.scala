@@ -1,6 +1,6 @@
 import scala.concurrent.{ExecutionContext, Future}
 
-object QuickTasksApp {
+object TimedBlockingTasksApp {
 
   def main(args: Array[String]): Unit = {
 
@@ -9,7 +9,7 @@ object QuickTasksApp {
     Thread.sleep(10000)
 
     println("[${Thread.currentThread().getName}] - starting task")
-    Tasks.quickBlockingTask2()
+    Tasks.timedBlockingTask2()
 
     println("waiting for 60 secs")
     Thread.sleep(60000)
@@ -25,7 +25,7 @@ object Tasks {
 
   // THE CALLBACK THREAD MIGHT NOT BE SAME AS THE COMPUTATION THREAD
   // We say that the callback is executed eventually.
-  def quickBlockingTask2()(implicit executionContext: ExecutionContext): Future[Int] = {
+  def timedBlockingTask2()(implicit executionContext: ExecutionContext): Future[Int] = {
     for {
       computedResult <- Future {
         Thread.sleep(2000)

@@ -3,7 +3,7 @@ import scala.concurrent.{Await, ExecutionContext, Future}
 
 object BlockingTasksWithGlobalExecutionContext {
 
-  private val data: Iterable[Input] = Range(1, 24).map(x => s"data-$x")
+  private val data: Iterable[Input] = Range(1, 100).map(x => s"data-$x")
 
   implicit val threadPool: ExecutionContext = scala.concurrent.ExecutionContext.Implicits.global
 

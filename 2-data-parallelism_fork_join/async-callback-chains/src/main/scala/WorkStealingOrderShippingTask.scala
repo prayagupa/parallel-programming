@@ -5,6 +5,8 @@ import scala.collection.JavaConverters
 
 /**
   * submit 100 tasks to a pool of threads 100
+  *
+  * distribute the shipping of orders
   */
 object WorkStealingOrderShippingTask {
 

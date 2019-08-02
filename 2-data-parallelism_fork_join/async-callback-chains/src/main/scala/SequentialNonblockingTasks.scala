@@ -23,6 +23,7 @@ object SequentialNonblockingTasks {
       _ <- packTask("item1")
       _ <- packTask("item2")
     } yield {
+      //yield may use the same or different thread
       println(s"[${Thread.currentThread().getName}]-packing and packing done")
       Packed(Seq("item1", "item2"))
     }

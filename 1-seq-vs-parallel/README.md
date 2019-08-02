@@ -150,7 +150,11 @@ $ sbt "runMain SequentialSingleThreadedApp"
 Parallel (parallel with blocking threads or parallel with non-blocking threads)
 -----------------------------------------------------------------------------
 
-- By default, futures and promises are non-blocking,
+useful references
+- https://wiki.haskell.org/Parallelism
+- https://typelevel.org/cats-effect/concurrency/basics.html
+
+- By default, `future`s and `promise`s are non-blocking,
 making use of callbacks instead of typical blocking operations.
 - Scala provides combinators such as `flatMap`, `foreach`, and `filter` used to compose futures in a non-blocking way.
 
@@ -182,7 +186,7 @@ val f: Future[List[Order]] = Future {
 
 Thread will be will be waiting till the response arrives from API,
 which means CPU is not doing any work during that time, so can be
-hired for uber driving in between.
+hired for uber driving(with another `thread`) in between.
 
 **To better utilize the CPU until the response arrives**, we should not
 block the rest of the program– this computation should be scheduled

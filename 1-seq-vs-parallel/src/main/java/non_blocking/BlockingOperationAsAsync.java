@@ -32,6 +32,9 @@ public class BlockingOperationAsAsync {
         //sum: 9900, time taken: 7567
     }
 
+    /**
+     * blocking calls to HTTP, files, database
+     */
     private static CompletableFuture<Integer> blockingReadOperation(int id) {
         return nonBlockingOps(() -> {
             try {

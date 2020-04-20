@@ -1,5 +1,7 @@
 package non_blocking;
 
+import util.BlockingOps;
+
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ForkJoinPool;
 
@@ -11,36 +13,29 @@ import java.util.concurrent.ForkJoinPool;
  */
 public class NonBlockingOpsOnDifferentThread {
 
-    private static final ForkJoinPool EXECUTOR = ForkJoinPool.commonPool();
+    private static final ForkJoinPool DEFAULT_EXECUTOR = ForkJoinPool.commonPool();
 
     public static void main(String[] args) {
         CompletableFuture.supplyAsync(() -> {
             System.out.println("[ORIGINAL THREAD]: " + Thread.currentThread().getName());
             return blockingOps1(2);
-        }, EXECUTOR).thenApplyAsync($ -> {
+        }, DEFAULT_EXECUTOR).thenApplyAsync($ -> {
             System.out.println("[THREAD]: " + Thread.currentThread().getName());
             return blockingOps2($);
-        }, EXECUTOR).thenApplyAsync($ -> {
+        }, DEFAULT_EXECUTOR).thenApplyAsync($ -> {
             System.out.println("[THREAD]: " + Thread.currentThread().getName());
             return blockingOps2($);
-        }, EXECUTOR).join();
+        }, DEFAULT_EXECUTOR)
+                .join();
     }
 
     private static int blockingOps1(int i) {
-        block(5 * 1000);
+        BlockingOps.block(5 * 1000);
         return i * 2;
     }
 
     private static int blockingOps2(int i) {
-        block(6 * 1000);
+        BlockingOps.block(6 * 1000);
         return i * 3;
-    }
-
-    private static void block(int time) {
-        try {
-            Thread.sleep(time);
-        } catch (InterruptedException e) {
-            e.printStackTrace();
-        }
     }
 }

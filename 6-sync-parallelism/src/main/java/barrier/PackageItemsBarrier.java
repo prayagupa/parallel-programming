@@ -1,3 +1,5 @@
+package barrier;
+
 import java.util.concurrent.BrokenBarrierException;
 import java.util.concurrent.CyclicBarrier;
 
@@ -46,6 +48,10 @@ public class PackageItemsBarrier {
     }
 
     public static void main(String[] args) throws InterruptedException {
-        new PackageItemsBarrier().initiatePacking();
+        PackageItemsBarrier packageItemsBarrier = new PackageItemsBarrier();
+        packageItemsBarrier.initiatePacking();
+        Thread.sleep(3000);
+        var completed = packageItemsBarrier.readyToPack;
+        System.out.println(completed);
     }
 }

@@ -1,3 +1,43 @@
+Process
+--------
+
+- A process is a program in execution. 
+- A process is an execution environment that consists of instructions, user-data, 
+and system-data segments, as well as lots of other resources such as CPU, memory, 
+address-space, disk and network I/O acquired at runtime. 
+- A program can have several copies of it running at the same time but 
+a process necessarily belongs to only one program.
+
+Thread
+------
+
+- Thread is the smallest unit of execution in a process. 
+- A thread simply executes instructions serially. 
+- A process can have multiple threads running as part of it. Usually, there would be some state 
+associated with the process that is shared among all the threads and in turn each thread would have 
+some state private to itself. The globally shared state amongst the threads of a process is 
+visible and accessible to all the threads, and special attention needs to be paid when any thread 
+tries to read or write to this global shared state. 
+- There are several constructs offered by various programming languages to guard and 
+discipline the access to this global state, which we will go into further detail in upcoming lessons.
+
+Concurrency
+-----------
+
+- A concurrent program is one that can be decomposed into constituent parts and each part 
+can be executed out of order or in partial order without affecting the final outcome. 
+-  concurrency is a property of a program
+
+Parallelism
+------------
+
+- A parallel system is one which necessarily has the ability to execute multiple programs 
+at the same time. 
+- Usually, this capability is aided by hardware in the form of multicore processors 
+on individual machines or as computing clusters where several machines are hooked up 
+to solve independent pieces of a problem simultaneously.
+
+
 
 [2. Shared memory and distributed memory multiprocessor systems](https://edux.pjwstk.edu.pl/mat/264/lec/main119.html)
 

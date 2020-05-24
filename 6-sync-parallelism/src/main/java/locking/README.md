@@ -78,7 +78,7 @@ a mutex is more suitable.
 
 https://blog.feabhas.com/2009/09/mutex-vs-semaphores-%E2%80%93-part-1-semaphores/
 
-[Mutex vs Semaphore in summary](http://stackoverflow.com/a/40282/432903)
+[MutEx vs Semaphore in summary](http://stackoverflow.com/a/40282/432903)
 --------
 
 ```

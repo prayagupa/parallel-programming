@@ -1,3 +1,5 @@
-apply plugin: 'java'
+plugins {
+    id 'application'
+}
 
 sourceCompatibility = 12

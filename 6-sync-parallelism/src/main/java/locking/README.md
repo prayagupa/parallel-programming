@@ -14,7 +14,7 @@ without causing a deadlock.
 --------
 
 ```
-A MutEx is a mutual exclusion semaphore, a special variant of a semaphore that only allows
+A MutEx is a MUTual EXclusion semaphore, a special variant of a semaphore that only allows
 one locker at a time and whose ownership restrictions may be more stringent than a normal semaphore.
 
 In other words, it's equivalent to a normal counting semaphore with a count of one and the requirement
@@ -30,6 +30,8 @@ When any people buy the albums at the same time: each person is a thread to buy 
 Obviously we need to use the MutEx to protect the albums because it is the shared resource.
 ```
 
+- eg. concert where only one artist can perform at a time. (so an artist locks the stage) 
+others have to wait until first artist is done.
 
 [JVM Lock Objects](https://docs.oracle.com/javase/tutorial/essential/concurrency/newlocks.html)
 
@@ -76,6 +78,15 @@ such as for a tape-to-tape copy. If you have one resource (say a memory location
 a mutex is more suitable.
 ```
 
+- A typical example would be a pool of database connections that can be handed out to requesting threads. 
+Say there are ten available connections but 50 requesting threads. 
+In such a scenario, a semaphore can only give out ten permits or connections at any given point in time.
+- it can also be used for cooperation and signaling amongst threads. 
+Semaphore also solves the issue of missed signals.
+
+- Mutex is owned by a thread, whereas a semaphore has no concept of ownership.
+- 
+
 https://blog.feabhas.com/2009/09/mutex-vs-semaphores-%E2%80%93-part-1-semaphores/
 
 [MutEx vs Semaphore in summary](http://stackoverflow.com/a/40282/432903)
@@ -107,3 +118,22 @@ semaphore.release()
 ```
 
 [Java Concurrency Part 1 – Semaphores](http://www.obsidianscheduler.com/blog/java-concurrency-part-1-semaphores/)
+
+3. monitor
+----------
+
+- a `monitor` is made up of a mutex and one or more condition variables
+- `monitor` has two queues or sets where threads can be placed. One is the "entry set" and the other is the "wait set"
+- Practically, in Java each object is a monitor and implicitly has a lock and is a condition variable too. 
+- You can think of a monitor as a mutex with a wait set. 
+- Monitors allow threads to exercise mutual exclusion as well as cooperation by allowing them to wait and signal 
+on conditions.
+
+- Hoare monitors - the signaling thread B yields the monitor to the woken up thread A and 
+"thread A" enters the monitor, while "thread B" sits out. 
+- The Java language and runtime system support thread synchronization through the use of monitors
+
+- A semaphore can allow several threads access to a given resource or critical section, 
+however, only a single thread at any point in time can own the monitor and access associated resource.
+
+- https://docs.oracle.com/javase/10/docs/api/javax/management/monitor/Monitor.html

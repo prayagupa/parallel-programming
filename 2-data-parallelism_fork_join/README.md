@@ -1,3 +1,16 @@
+Amdahl's law
+-------------
+
+- Amdahl's law describes the theoretical speedup a program can achieve at best by 
+using additional computing resources.
+
+```
+S(n) = 1 / ((1 - P) + P/n)
+
+where, 
+P = the fraction of the program that is parallelizable
+n = cores or threads.
+```
 
 bulkheading and work sharing
 ----------------------------

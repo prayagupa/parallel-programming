@@ -75,9 +75,6 @@ Static Loop Scheduling           | Dynamic Loop Scheduling | Guided Loop Schedul
 | has low overhead, but may have high load imbalance. | has higher overhead, but can reduce load imbalance. | 
 | # pragma omp parallel for private(tid) schedule(static, ChunkSize) | # pragma omp parallel for private(tid) schedule(dynamic, ChunkSize) | schedule(guided)
 
-
-
-
 [Thread states](https://docs.oracle.com/javase/7/docs/api/java/lang/Thread.State.html) JWN, 07-2016, SPLK 2019
 --------------
 

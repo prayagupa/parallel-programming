@@ -8,18 +8,31 @@ address-space, disk and network I/O acquired at runtime.
 - A program can have several copies of it running at the same time but 
 a process necessarily belongs to only one program.
 
+```bash
+$ ps
+  PID TTY           TIME CMD
+ 1674 ttys000    0:01.70 -bash
+11378 ttys000    1:55.53 docker run -p 27017:27017 -it mongodb --net=host
+34745 ttys001    8:41.88 /Library/Java/JavaVirtualMachines/jdk-12.0.1.jdk/Contents/Home/bin/java -agentlib:jdwp=transport=dt_sock
+50600 ttys001    3:32.81 /usr/bin/jshell
+50638 ttys002    1:05.57 /usr/bin/jconsole
+34772 ttys003    0:00.06 /System/Library/Frameworks/Python.framework/Versions/2.7/Resources/Python.app/Contents/MacOS/Python
+```
+
 Thread
 ------
 
 - Thread is the smallest unit of execution in a process. 
 - A thread simply executes instructions serially. 
-- A process can have multiple threads running as part of it. Usually, there would be some state 
-associated with the process that is shared among all the threads and in turn each thread would have 
-some state private to itself. The globally shared state amongst the threads of a process is 
-visible and accessible to all the threads, and special attention needs to be paid when any thread 
+- A process can have multiple threads running as part of it. 
+- Usually, there would be some state associated with the process that is shared among all the threads and 
+in turn each thread would have some state private to itself. The globally shared state(heap) amongst the threads 
+of a process is visible and accessible to all the threads, and special attention needs to be paid when any thread 
 tries to read or write to this global shared state. 
 - There are several constructs offered by various programming languages to guard and 
-discipline the access to this global state, which we will go into further detail in upcoming lessons.
+discipline the access to this global state.
+- All thread in java are native Linux threads, a.k.a `pthreads`(POSIX)
+- use of multithreading increases [throughput along with the increased responsiveness (latency).](https://docs.microsoft.com/en-us/dotnet/standard/threading/threads-and-threading)
 
 Concurrency
 -----------
@@ -27,16 +40,6 @@ Concurrency
 - A concurrent program is one that can be decomposed into constituent parts and each part 
 can be executed out of order or in partial order without affecting the final outcome. 
 -  concurrency is a property of a program
-
-Parallelism
-------------
-
-- A parallel system is one which necessarily has the ability to execute multiple programs 
-at the same time. 
-- Usually, this capability is aided by hardware in the form of multicore processors 
-on individual machines or as computing clusters where several machines are hooked up 
-to solve independent pieces of a problem simultaneously.
-
 
 [Thread scheduling](https://en.wikipedia.org/wiki/Thread_(computing)#Scheduling)
 ------------
@@ -89,6 +92,8 @@ Static Loop Scheduling           | Dynamic Loop Scheduling | Guided Loop Schedul
 |TIMED_WAITING | A thread **waiting for another thread** to perform an action for up to a specified waiting time. (`Thread.sleep(n)`)|
 | TERMINATED   | A thread that has exited.|
 
+![](RUNNABLE.png)
+![](TIMED_WAITING.png)
 
 ```bash
                    RUNNABLE 
@@ -96,6 +101,11 @@ NEW ~~~~~~~~~~~~~> BLOCKED  ~~~~~~~~~~~~~~~~> TERMINATED
                    WAITING
                    TIMED_WAITING
 ```
+
+Java Memory Model
+----------------
+- set of rules according to which the compiler, the processor or 
+the runtime is permitted to reorder memory operations. 
 
 [Where is Thread Object created? Stack or JVM Heap Memory?](http://stackoverflow.com/a/19433994/432903) - I BBY, 2018
 
@@ -193,12 +203,12 @@ shipOrders.start()
 
 [sleep vs wait](http://stackoverflow.com/q/1036754/432903) JWN 07-2016
 
-.sleep | .notify(.publish)/ .wait(.subscribe)/ Observer pattern in OO
+`.sleep` | `.notify`(.publish)/ `.wait`(.subscribe)/ Observer pattern in OO
 -------|----------------
-sleep() sends the Thread to sleep as it was before, it just packs the context and stops executing for a predefined time. | wait(), on the contrary, is a thread (or message) synchronization mechanism that allows you to notify a Thread of which you have no stored reference (nor care). 
-So in order to wake it up before the due time, you need to know the Thread reference. This is not a common situation in a multi-threaded environment. It's mostly used for time-synchronization (e.g. wake in exactly 3.5 seconds) and/or hard-coded fairness (just sleep for a while and let others threads work). | You can think of it as a publish-subscribe pattern (wait == subscribe and notify() == publish). Basically using notify() you are sending a message (that might even not be received at all and normally you don't care).
-To sum up, you normally use sleep() for time-syncronization | and wait() for multi-thread-synchronization.
-In sleep() the thread stops working for the specified duration. | In wait() the thread stops working until the object being waited-on is notified, generally by other threads.
+`sleep()` sends the Thread to sleep as it was before, it just packs the context and stops executing for a predefined time. | `wait()`, on the contrary, is a thread (or message) synchronization mechanism that allows you to notify a Thread of which you have no stored reference (nor care). 
+So in order to wake it up before the due time, you need to know the Thread reference. This is NOT a common situation in a multi-threaded environment. It's mostly used for time-synchronization (e.g. wake in exactly 3.5 seconds) and/or hard-coded fairness (just sleep for a while and let others threads work). | You can think of it as a publish-subscribe pattern (wait == subscribe and notify() == publish). Basically using notify() you are sending a message (that might even not be received at all and normally you don't care).
+To sum up, you normally use `sleep()` for time-syncronization | and `wait()` for multi-thread-synchronization.
+In `sleep()` the thread stops working for the specified duration. | In `wait()` the thread stops working until the object being waited-on is notified, generally by other threads.
 
 [`Runnable.run`(method call) vs `Thread.start`(start a thread)](http://stackoverflow.com/a/8579702/432903)
 --------------
@@ -229,31 +239,11 @@ So when the jobs of User/Non-Daemon threads is over, Daemon threads march away.
 
 [Shutting down threads cleanly](http://www.javaspecialists.eu/archive/Issue056.html)
 
-[Why Are Thread.stop, Thread.suspend, Thread.resume and Runtime.runFinalizersOnExit Deprecated?](http://docs.oracle.com/javase/1.5.0/docs/guide/misc/threadPrimitiveDeprecation.html)
+[Why Are `Thread.stop`, `Thread.suspend`, `Thread.resume` and `Runtime.runFinalizersOnExit` Deprecated?](http://docs.oracle.com/javase/1.5.0/docs/guide/misc/threadPrimitiveDeprecation.html)
 
-http://stackoverflow.com/a/3194618/432903
+[src/main/java/blocking/GracefulInterruptionExample.java](src/main/java/blocking/GracefulInterruptionExample.java)
 
-```scala
-
-   val processor = new Thread(new Runnable(){
-        
-        override def run() {
-            while(!Thread.currentThread().isInterrupted()){
-                // do stuff         
-            }   
-        }})
-    t.start()
-
-    // Sleep a second, and then interrupt
-    try {
-        Thread.sleep(1000);
-    } catch { 
-        case e: InterruptedException => println("Processor is interrupted")
-    }
-    t.interrupt()
-```
-
-[Hyper-threading](https://en.wikipedia.org/wiki/Hyper-threading)
+[Hyper-threading technology](https://en.wikipedia.org/wiki/Hyper-threading)
 ----------------
 
 ```
@@ -414,36 +404,16 @@ is a programming construct that waits for and dispatches events or messages in a
 
 ![](http://blog.carbonfive.com/wp-content/uploads/2013/10/event-loop.png)
 
-```
-The issue with the "one thread per request" model for a server 
-is that they don't scale well for several scenarios compared to 
-the event loop thread model.
-
-Typically, in I/O intensive scenarios the requests spend most 
-of the time waiting for I/O to complete. 
-
-During this time, in the "one thread per request" model, the 
-resources linked to the thread (such as memory) 
-are unused and memory is the limiting factor. 
-```
-
-```
-In the Event Loop model, the loop thread selects the next event 
-(I/O finished) to handle. 
-So the thread is always busy (if you program it correctly of course).
-```
-
-
-```
-The event loop model as all new things seems shiny and the 
-solution for all issues but which model to use will depend on 
-the scenario you need to tackle. 
-
-If you have an intensive I/O scenario (like a proxy), 
-the event base model will rule, whereas 
-a CPU intensive scenario with a low number of concurrent 
-processes will work best with the thread-based model.
-```
+| Thread per request                                                      |   EL                                               |
+|-------------------------------------------------------------------------|----------------------------------------------------|
+| - The issue with the "one thread per request" model for a server        | In the Event Loop model, the loop thread selects the next event  |
+|  is that they don't scale well for several scenarios compared to        | (I/O finished) to handle. |
+|  the event loop thread model.                                           | So the thread is always busy (if you program it correctly of course). |
+| - Typically, in I/O intensive scenarios the requests spend most         | The event loop model as all new things seems shiny and the solution for all issues but which model to use will depend on the scenario you need to tackle. If you have an intensive I/O scenario (like a proxy), the event base model will rule, whereas a CPU intensive scenario with a low number of concurrent processes will work best with the thread-based model.|
+|  of the time waiting for I/O to complete.                               | |
+| - During this time, in the "one thread per request" model, the          | | 
+|   resources linked to the thread (such as memory)                       | |
+|   are unused and memory is the limiting factor.                         | |
 
 ```
 In the real world most of the scenarios will be a bit in the middle. 
@@ -464,6 +434,12 @@ scenario without any effort, you will end up with a bullet in your foot.
 
 Parallelism
 ------------
+
+- A parallel system is one which necessarily has the ability to execute multiple programs 
+at the same time. 
+- Usually, this capability is aided by hardware in the form of multicore processors 
+on individual machines or as computing clusters where several machines are hooked up 
+to solve independent pieces of a problem simultaneously.
 
 Data Partitioning
 - partitions are units of parallelism
@@ -655,7 +631,8 @@ useful references
 
 - By default, `future`s and `promise`s are non-blocking,
 making use of callbacks instead of typical blocking operations.
-- Scala provides combinators such as `flatMap`, `foreach`, and `filter` used to compose futures in a non-blocking way.
+- Java provides combinators such as `thenApply`, `thenAccept`, and `thenCompose` 
+used to compose futures in a non-blocking way.
 
 Q: Where do I get thread from?
 ------------------------------
@@ -663,10 +640,10 @@ Q: Where do I get thread from?
 A: [`ThreadExecutor`](https://docs.oracle.com/javase/8/docs/api/java/util/concurrent/Executor.html) or `ExecutionContext` or [`Threadpool`](https://docs.rs/threadpool/1.7.1/threadpool/)
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-By default the `ExecutionContext.global` sets the parallelism level of its
+By default the `ForkJoinPool.commonPool()` sets the parallelism level of its
 underlying `fork-join` pool to the amount of available processors
 
-`ForkJoinPool` can increase the amount of threads beyond its `parallelismLevel`
+in scala `ForkJoinPool` can increase the amount of threads beyond its `parallelismLevel`
 only in the presence of blocking computation.
 
 Let’s assume that we want to use a order API of some retail company
@@ -683,7 +660,7 @@ val f: Future[List[Order]] = Future {
 }
 ```
 
-Thread will be will be waiting till the response arrives from API,
+Thread will be waiting till the response arrives from API,
 which means CPU is not doing any work during that time, so can be
 hired for uber driving(with another `thread`) in between.
 

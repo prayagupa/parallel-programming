@@ -88,7 +88,7 @@ Static Loop Scheduling           | Dynamic Loop Scheduling | Guided Loop Schedul
 |              |                                                                      |
 |BLOCKED       | A thread **blocked waiting** for a [monitor lock - syncd](https://stackoverflow.com/a/15680550/432903) |
 |WAITING       | A thread **waiting indefinitely** for another thread to perform a particular action. |
-|              |            |
+|              | thread can go to `WAITING` state for three reasons `Object.wait`, `Thread.join`, `LockSupport.park` (causes `Parking`) |
 |TIMED_WAITING | A thread **waiting for another thread** to perform an action for up to a specified waiting time. (`Thread.sleep(n)`)|
 | TERMINATED   | A thread that has exited.|
 
@@ -101,6 +101,19 @@ NEW ~~~~~~~~~~~~~> BLOCKED  ~~~~~~~~~~~~~~~~> TERMINATED
                    WAITING
                    TIMED_WAITING
 ```
+
+[Thread Blocking](https://docs.oracle.com/en/java/javase/11/docs/api/java.base/java/util/concurrent/locks/LockSupport.html)
+----
+
+See https://stackoverflow.com/a/51788005/432903
+
+| Action       | description  |
+|--------------| ------------ |
+| Park         | returns immediately if the permit is available, consuming it in the process; otherwise it may block | 
+|              | park serves as an optimization of a "busy wait" that does not waste as much time spinning |
+|              | `Parking` means suspending execution until permit is available. |
+| Unpark       | unpark makes the permit available, if it was not already available | 
+
 
 Java Memory Model
 ----------------
@@ -166,8 +179,9 @@ ie. each of threads will get [8192K amount of memory (8MB)](https://stackoverflo
 **For JVM,**
 
 Default Oracle 64 bit JVM has 1M stack size per thread which means,
-```
-1 GB RAM = 1024/1MB = 1024 threads
+```bash
+1 GB RAM = 1024MB/ 1MB
+         = 1024 threads
 ```
 
 To raise the number of concurrent threads you should 
@@ -177,28 +191,28 @@ lower the default [StackSize(ss)](https://dzone.com/articles/java-what-limit-num
 
 http://docs.oracle.com/javase/1.5.0/docs/api/java/lang/Thread.UncaughtExceptionHandler.html
 
-```scala
-val shipOrders = new Thread() {
-    def run() {
+```java
+var shipOrders = new Thread() {
+    public void run() {
         
-        println("Shipping ...")
+        System.out.println("Shipping ...");
         try {
-            Thread.sleep(1000)
+            Thread.sleep(1000);
         } catch (InterruptedException e) {
-            println("Interrupted.")
+            System.out.println("Interrupted.");
         }
-        
-        println("Shipping exception ...")
-        throw new RuntimeException("Items missing in the package.")
+
+        System.out.println("Shipping exception ...");
+        throw new RuntimeException("Items missing in the package.");
     }
-}
+};
 
 shipOrders.setUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
-                                           def uncaughtException(th: Thread, th: Throwable) {
-                                               println("Error shipping orders : " + th)
+                                           void uncaughtException(th: Thread, th: Throwable) {
+                                                System.out.println("Error shipping orders : " + th)
                                            }
-                                       })
-shipOrders.start()
+                                       });
+shipOrders.start();
 ```
 
 [sleep vs wait](http://stackoverflow.com/q/1036754/432903) JWN 07-2016

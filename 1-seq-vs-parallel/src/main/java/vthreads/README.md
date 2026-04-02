@@ -26,13 +26,13 @@ graph TD
 ```
 
 ### Lifecycle & Cost
-| Property | Detail |
-|---|---|
-| **Stack size** | ~1 MB reserved per thread (configurable via `-Xss`) |
-| **Creation cost** | ~1 ms OS syscall + memory allocation |
-| **Context switch** | OS-level, ~1–10 µs, saves/restores full CPU register set |
-| **Max practical threads** | ~10,000 before memory/scheduling pressure |
-| **Blocking behaviour** | Blocks the OS thread — carrier is idle, CPU wasted |
+| Property                  | Detail                                                   |
+|---------------------------|----------------------------------------------------------|
+| **Stack size**            | ~1 MB reserved per thread (configurable via `-Xss`)      |
+| **Creation cost**         | ~1 ms OS syscall + memory allocation                     |
+| **Context switch**        | OS-level, ~1–10 µs, saves/restores full CPU register set |
+| **Max practical threads** | ~10,000 before memory/scheduling pressure                |
+| **Blocking behaviour**    | Blocks the OS thread — carrier is idle, CPU wasted       |
 
 ### What happens on a blocking call (platform thread)
 
@@ -120,11 +120,11 @@ sequenceDiagram
 ```
 
 #### Stack Storage
-| | Platform Thread | Virtual Thread |
-|---|---|---|
-| Stack location | Native memory (off-heap) | Java heap |
-| Stack size | ~1 MB fixed | ~few KB, grows dynamically |
-| GC managed | ❌ No | ✅ Yes |
+|                | Platform Thread          | Virtual Thread             |
+|----------------|--------------------------|----------------------------|
+| Stack location | Native memory (off-heap) | Java heap                  |
+| Stack size     | ~1 MB fixed              | ~few KB, grows dynamically |
+| GC managed     | ❌ No                     | ✅ Yes                      |
 
 #### Scheduler
 - Built on `ForkJoinPool` in FIFO mode (not work-stealing for virtual threads).
@@ -155,18 +155,18 @@ try {
 
 ## 3. Platform vs Virtual — Side-by-Side
 
-| Aspect | Platform Thread | Virtual Thread |
-|---|---|---|
-| Mapping | 1 Java thread = 1 OS thread | N Java threads = ~#cores OS threads |
-| Stack memory | ~1 MB/thread (native) | ~few KB/thread (heap) |
-| Creation cost | High (OS syscall) | Very low (heap allocation) |
-| Context switch | OS-level (~µs) | JVM-level (cheaper) |
-| Max practical count | ~10 K | Millions |
-| Blocking behaviour | Parks OS thread | Unmounts, frees carrier |
-| Best for | CPU-bound tasks | I/O-bound / blocking tasks |
-| `synchronized` | Fine | Causes pinning — prefer `ReentrantLock` |
-| Thread locals | Supported | Supported (prefer `ScopedValue` in future) |
-| Debugging | Mature tooling | Improving (JDK 21+) |
+| Aspect              | Platform Thread             | Virtual Thread                             |
+|---------------------|-----------------------------|--------------------------------------------|
+| Mapping             | 1 Java thread = 1 OS thread | N Java threads = ~#cores OS threads        |
+| Stack memory        | ~1 MB/thread (native)       | ~few KB/thread (heap)                      |
+| Creation cost       | High (OS syscall)           | Very low (heap allocation)                 |
+| Context switch      | OS-level (~µs)              | JVM-level (cheaper)                        |
+| Max practical count | ~10 K                       | Millions                                   |
+| Blocking behaviour  | Parks OS thread             | Unmounts, frees carrier                    |
+| Best for            | CPU-bound tasks             | I/O-bound / blocking tasks                 |
+| `synchronized`      | Fine                        | Causes pinning — prefer `ReentrantLock`    |
+| Thread locals       | Supported                   | Supported (prefer `ScopedValue` in future) |
+| Debugging           | Mature tooling              | Improving (JDK 21+)                        |
 
 ---
 
@@ -174,14 +174,14 @@ try {
 
 ✅ **Use virtual threads when your tasks spend most time blocking:**
 
-| Use Case | Why Virtual Threads Help |
-|---|---|
-| HTTP servers (many concurrent requests) | Each request can block on DB/API without consuming an OS thread |
-| Database query handlers | JDBC calls block; virtual threads unmount while waiting |
-| REST/gRPC clients | Network I/O dominates; thousands of concurrent calls become trivial |
-| File I/O pipelines | Reading/writing files blocks; virtual threads handle fan-out easily |
-| Message queue consumers | Blocking poll/consume operations park cheaply |
-| Scheduled/batch jobs | Thousands of small tasks with sleep/wait intervals |
+| Use Case                                | Why Virtual Threads Help                                            |
+|-----------------------------------------|---------------------------------------------------------------------|
+| HTTP servers (many concurrent requests) | Each request can block on DB/API without consuming an OS thread     |
+| Database query handlers                 | JDBC calls block; virtual threads unmount while waiting             |
+| REST/gRPC clients                       | Network I/O dominates; thousands of concurrent calls become trivial |
+| File I/O pipelines                      | Reading/writing files blocks; virtual threads handle fan-out easily |
+| Message queue consumers                 | Blocking poll/consume operations park cheaply                       |
+| Scheduled/batch jobs                    | Thousands of small tasks with sleep/wait intervals                  |
 
 ### Rule of Thumb
 > **If your thread spends more time waiting than computing, virtual threads are the right tool.**
@@ -192,70 +192,80 @@ try {
 
 ❌ **Avoid virtual threads when:**
 
-| Scenario | Reason |
-|---|---|
-| CPU-intensive tasks (encryption, image processing, ML) | Blocking frees the carrier — but if you never block, there's no benefit. Use a fixed platform thread pool sized to CPU cores. |
-| Heavy use of `synchronized` with long critical sections | Pinning prevents unmount; defeats the purpose |
-| Code that relies on `ThreadLocal` for large caches | Each virtual thread can have its own `ThreadLocal`; millions of threads = memory pressure |
-| Real-time / latency-sensitive code | JVM scheduling adds non-determinism |
+| Scenario                                                | Reason                                                                                                                        |
+|---------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------|
+| CPU-intensive tasks (encryption, image processing, ML)  | Blocking frees the carrier — but if you never block, there's no benefit. Use a fixed platform thread pool sized to CPU cores. |
+| Heavy use of `synchronized` with long critical sections | Pinning prevents unmount; defeats the purpose                                                                                 |
+| Code that relies on `ThreadLocal` for large caches      | Each virtual thread can have its own `ThreadLocal`; millions of threads = memory pressure                                     |
+| Real-time / latency-sensitive code                      | JVM scheduling adds non-determinism                                                                                           |
 
 ---
 
 ## 6. Benchmark
 
-Results from `VirtualThreadExample.java` (Java 21, Apple M-series, 10 CPU cores):
+Results from [`PthreadVthreadComparison.java`](PthreadVthreadComparison.java) — Java 21, Apple M-series, 10 CPU cores.
 
-### Test A — 100 tasks, each blocking for 500 ms
+### Scenario 1 — Equal Pool Size (100 tasks, 500 ms blocking, pool = 100)
 
-| Thread Type | Pool Size | Total Time |
-|---|---|---|
-| Platform threads | 100 (fixed) | ~510 ms |
-| Virtual threads | unbounded | ~510 ms |
+| Thread Type      | Time     |
+|------------------|----------|
+| Platform threads | 525 ms   |
+| Virtual threads  | 516 ms   |
+| **Speedup**      | **1.0×** |
 
-> Both finish in ~1 blocking period because the platform pool was sized equal to task count. The real difference appears when the pool is **smaller** than the task count.
+> Pool is sized equal to task count so all platform threads run in parallel — parity is expected. The gap only opens when the pool is **constrained**.
 
-### Test B — 10,000 tasks, each blocking for 500 ms
+### Scenario 2 — Constrained Platform Pool (1,000 tasks, 200 ms blocking, pool = 20)
 
-| Thread Type | Pool Size | Total Time |
-|---|---|---|
-| Platform threads | 200 (fixed) | ~25,000 ms (50 rounds × 500 ms) |
-| Virtual threads | unbounded | ~510 ms |
+| Thread Type      | Time                                  |
+|------------------|---------------------------------------|
+| Platform threads | 10,176 ms                             |
+| Virtual threads  | 208 ms                                |
+| **Speedup**      | **48.9× faster with virtual threads** |
 
-> Virtual threads complete all 10,000 tasks in a single ~500 ms wave since blocking unmounts the carrier immediately.
+> Platform threads must process 1,000 tasks in batches of 20 (50 rounds × 200 ms = ~10 s). Virtual threads unmount on every block, completing all tasks in a single ~200 ms wave.
 
-### Test C — 100,000 tasks, each blocking for 50 ms (from `massiveConcurrency()`)
+### Scenario 3 — Massive Load (100,000 tasks, 50 ms blocking, pool = 200)
 
-| Thread Type | Time |
-|---|---|
-| Platform threads (fixed=200) | ~25,000 ms |
-| Virtual threads | ~55–80 ms |
+| Thread Type      | Time                                  |
+|------------------|---------------------------------------|
+| Platform threads | 26,536 ms                             |
+| Virtual threads  | 370 ms                                |
+| **Speedup**      | **71.7× faster with virtual threads** |
+
+> 100k tasks processed in 500 rounds of 200 by platform threads (~26 s total). Virtual threads handle all 100k concurrently with trivial overhead.
+
+```mermaid
+xychart-beta
+    title "Execution Time: Platform vs Virtual Threads (ms, lower is better)"
+    x-axis ["Scenario 1 (equal pool)", "Scenario 2 (constrained)", "Scenario 3 (massive load)"]
+    y-axis "Time (ms)" 0 --> 27000
+    bar [525, 10176, 26536]
+    bar [516, 208, 370]
+```
 
 ### Memory Footprint
 
-| Count | Platform Threads | Virtual Threads |
-|---|---|---|
-| 1,000 | ~1 GB native stack | ~10 MB heap |
-| 10,000 | OOM / OS limit | ~100 MB heap |
-| 100,000 | Not feasible | ~1 GB heap |
+| Thread Count | Platform Threads   | Virtual Threads |
+|--------------|--------------------|-----------------|
+| 1,000        | ~1 GB native stack | ~10 MB heap     |
+| 10,000       | OOM / OS limit     | ~100 MB heap    |
+| 100,000      | Not feasible       | ~1 GB heap      |
 
 ---
 
 ## 7. Code Examples
 
-See [`VirtualThreadExample.java`](VirtualThreadExample.java) for runnable demos:
-
-| Section | What it shows |
-|---|---|
-| `basicVirtualThread()` | Creating a single virtual thread with `Thread.ofVirtual()` |
-| `virtualThreadPerTask()` | `Executors.newVirtualThreadPerTaskExecutor()` — the recommended pattern |
-| `virtualThreadsVsPlatformThreads()` | Head-to-head timing with equal task counts |
-| `massiveConcurrency()` | 100,000 virtual threads completing in milliseconds |
+See [`VirtualThreadExample.java`](VirtualThreadExample.java) and [`PthreadVthreadComparison.java`](PthreadVthreadComparison.java)
 
 ### Quick Start
 
 ```bash
-# From project root (1-seq-vs-parallel)
+# Virtual thread demos
 ./gradlew run --args="vthreads.VirtualThreadExample"
+
+# Platform vs virtual benchmark
+./gradlew run --args="vthreads.PthreadVthreadComparison"
 ```
 
 ### Minimum Requirements

@@ -13,8 +13,8 @@ public class VirtualThreadExample {
 
         basicVirtualThread();
         virtualThreadPerTask();
-        virtualThreadsVsPlatformThreads();
         massiveConcurrency();
+        System.out.println("(For platform vs virtual thread comparison, run ThreadComparison.java)");
     }
 
     // 1. Create a single virtual thread directly
@@ -49,37 +49,9 @@ public class VirtualThreadExample {
         System.out.println();
     }
 
-    // 3. Virtual threads vs platform threads — side by side
-    static void virtualThreadsVsPlatformThreads() throws InterruptedException {
-        System.out.println("-- 3. Virtual vs Platform Threads --");
-        int taskCount = 100;
-
-        // Platform threads
-        long platformStart = System.currentTimeMillis();
-        try (ExecutorService platformPool = Executors.newFixedThreadPool(taskCount)) {
-            for (int i = 0; i < taskCount; i++) {
-                platformPool.submit(() -> simulateBlockingIO(BLOCKING_PERIOD_MS));
-            }
-        }
-        long platformTime = System.currentTimeMillis() - platformStart;
-
-        // Virtual threads
-        long virtualStart = System.currentTimeMillis();
-        try (ExecutorService virtualPool = Executors.newVirtualThreadPerTaskExecutor()) {
-            for (int i = 0; i < taskCount; i++) {
-                virtualPool.submit(() -> simulateBlockingIO(BLOCKING_PERIOD_MS));
-            }
-        }
-        long virtualTime = System.currentTimeMillis() - virtualStart;
-
-        System.out.printf("Platform threads (%d tasks, 200ms IO each): %dms%n", taskCount, platformTime);
-        System.out.printf("Virtual  threads (%d tasks, 200ms IO each): %dms%n", taskCount, virtualTime);
-        System.out.println();
-    }
-
-    // 4. Massive concurrency — 100k virtual threads
+    // 3. Massive concurrency — 100k virtual threads
     static void massiveConcurrency() throws InterruptedException {
-        System.out.println("-- 4. Massive Concurrency: 100,000 Virtual Threads --");
+        System.out.println("-- 3. Massive Concurrency: 100,000 Virtual Threads --");
         int count = 100_000;
         long start = System.currentTimeMillis();
 

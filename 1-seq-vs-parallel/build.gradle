@@ -2,4 +2,8 @@ plugins {
     id 'application'
 }
 
-sourceCompatibility = 12
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}

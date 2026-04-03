@@ -1,413 +1,406 @@
+# Data Parallelism & Fork/Join
 
-Parallelism
-------------
+> **Audience:** Engineers reasoning about throughput, latency, and thread-model trade-offs at scale.
 
-- A parallel system is one which necessarily has the ability to execute multiple programs 
-at the same time. 
-- Usually, this capability is aided by hardware in the form of multicore processors 
-on individual machines or as computing clusters where several machines are hooked up 
-to solve independent pieces of a problem simultaneously.
+---
 
-Data Partitioning (based on available cores)
---------------------------------------------
+## Table of Contents
 
-- partitions are units of parallelism
+1. [What is Parallelism?](#1-what-is-parallelism)
+2. [Theoretical Limits — Amdahl's Law](#2-theoretical-limits--amdahls-law)
+3. [Data Partitioning as the Unit of Parallelism](#3-data-partitioning-as-the-unit-of-parallelism)
+4. [Execution Models: Blocking vs. Non-Blocking Threads](#4-execution-models-blocking-vs-non-blocking-threads)
+5. [Thread Pool Strategies](#5-thread-pool-strategies)
+6. [Fork/Join Framework — Deep Dive](#6-forkjoin-framework--deep-dive)
+7. [Actor Model — Shared-Nothing Parallelism](#7-actor-model--shared-nothing-parallelism)
+8. [Bulkhead Pattern — Fault Isolation](#8-bulkhead-pattern--fault-isolation)
+9. [Benchmark: Blocking Tasks on ForkJoinPool](#9-benchmark-blocking-tasks-on-forkjoinpool)
+10. [Key Decision Framework](#10-key-decision-framework)
+11. [Further Reading](#11-further-reading)
 
-[How does Kafka streaming handle concurrency? Is everything run in a single thread?](https://stackoverflow.com/a/39992430/432903)
+---
 
-[Kafka Streaming data partition](http://docs.confluent.io/current/streams/architecture.html#stream-partitions-and-tasks)
+## 1. What is Parallelism?
 
-[Actor Model](http://doc.akka.io/docs/akka/snapshot/scala/general/actors.html) / Process
--------
+A **parallel system** can execute multiple computations *simultaneously*, typically backed by:
 
-[How does Actors work compared to threads?](https://stackoverflow.com/a/3587250/432903)
+- **Multi-core CPUs** — intra-machine parallelism
+- **Compute clusters** — inter-machine parallelism, where independent sub-problems run on separate nodes
 
+Parallelism is *not* the same as concurrency:
+
+| | Concurrency | Parallelism |
+|---|---|---|
+| **Goal** | Structure | Speed |
+| **Mechanism** | Task interleaving | Simultaneous execution |
+| **Requires multi-core?** | No | Yes |
+
+```mermaid
+timeline
+    title Single Core — Concurrency (Interleaved)
+    section CPU
+        Task A : running
+        Task B : running
+        Task A : running
+        Task B : running
+
+    title Dual Core — Parallelism (Simultaneous)
+    section Core 1
+        Task A : running
+        Task A : running
+    section Core 2
+        Task B : running
+        Task B : running
 ```
-The actor model operates on message passing. 
-Individual processes (actors) are allowed to send messages 
-asynchronously to each other. 
 
-What distinguishes this from what we normally think of as the 
-threading model, is that there is (in theory at least) 
-no shared state.
+---
 
-And if one believes that shared state is the root of all evil, 
-then the actor model becomes very attractive.
-```
+## 2. Theoretical Limits — Amdahl's Law
 
-[How, if at all, do Erlang Processes map to Kernel Threads?](https://stackoverflow.com/a/605631/432903)
-
-[akka jvm threads vs os threads when performing io](https://stackoverflow.com/a/7458958/432903)
-
-https://cr.openjdk.java.net/~rpressler/loom/Loom-Proposal.html
-
-Amdahl's law
--------------
-
-- Amdahl's law describes the theoretical speedup a program can achieve at best by 
-using additional computing resources.
+Before throwing more cores at a problem, quantify the ceiling:
 
 ```
 S(n) = 1 / ((1 - P) + P/n)
 
-where, 
-P = the fraction of the program that is parallelizable
-n = cores or threads.
+  P = fraction of work that is parallelizable
+  n = number of cores / threads
 ```
 
-Parallel (parallel with blocking threads or parallel with non-blocking threads)
------------------------------------------------------------------------------
+**Practical implications for system design:**
 
-useful references
-- https://wiki.haskell.org/Parallelism
-- https://typelevel.org/cats-effect/concurrency/basics.html
+- If only **50%** of work is parallelizable, max speedup is **2×** regardless of cores.
+- At **95%** parallelizable, 20 cores yield ~10× speedup; 2000 cores yield ~20×.
+- The serial fraction `(1 - P)` is the dominant cost at scale — identify and eliminate it early.
+- This is why **partitioning strategy** (see §3) and **coordination overhead** matter more than raw core count.
 
-- By default, `future`s and `promise`s are non-blocking,
-making use of callbacks instead of typical blocking operations.
-- Java provides combinators such as `thenApply`, `thenAccept`, and `thenCompose` 
-used to compose futures in a non-blocking way.
+```mermaid
+xychart-beta
+    title "Amdahl's Law — Max Speedup S(n) vs Cores (n)"
+    x-axis "Cores (n)" [1, 2, 4, 8, 16, 32, 64]
+    y-axis "Speedup S(n)" 0 --> 20
+    line "P=50%"  [1, 1.33, 1.6, 1.78, 1.88, 1.94, 1.97]
+    line "P=75%"  [1, 1.6,  2.29, 3.2,  4.27, 5.57, 6.96]
+    line "P=90%"  [1, 1.82, 3.08, 4.71, 6.4,  7.80, 8.97]
+    line "P=95%"  [1, 1.90, 3.48, 5.93, 9.14, 12.5, 15.5]
+```
 
-Where do I get thread from?
-------------------------------
+---
 
-- [`ThreadExecutor`](https://docs.oracle.com/javase/8/docs/api/java/util/concurrent/Executor.html) or `ExecutionContext` or [`Threadpool`](https://docs.rs/threadpool/1.7.1/threadpool/)
------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+## 3. Data Partitioning as the Unit of Parallelism
 
-By default the `ForkJoinPool.commonPool()` sets the parallelism level of its
-underlying `fork-join` pool to the amount of available processors
+**Partitions are the unit of parallelism.** The number of effective parallel workers is bounded by `min(partitions, cores)`.
 
-in scala `ForkJoinPool` can increase the amount of threads beyond its `parallelismLevel`
-only in the presence of blocking computation.
+This principle manifests across the stack:
 
-Let’s assume that we want to use a order API of some retail company
-to obtain a list of orders for a given user.
+| System | Partition Concept |
+|---|---|
+| Kafka | [Stream partitions → tasks](http://docs.confluent.io/current/streams/architecture.html#stream-partitions-and-tasks) assigned to stream threads |
+| Akka | Actor mailboxes dispatched to thread pool workers |
+| ForkJoinPool | Recursively split sub-tasks scheduled across worker threads |
+| HDFS/Spark | HDFS blocks / RDD partitions mapped to executor slots |
+
+**Design rule:** partition count should be a multiple of the worker count to prevent stragglers and ensure balanced load.
+
+See: [How does Kafka handle concurrency?](https://stackoverflow.com/a/39992430/432903)
+
+---
+
+## 4. Execution Models: Blocking vs. Non-Blocking Threads
+
+### The Core Problem
+
+A blocking thread holds a JVM/OS thread while waiting for I/O. With `ForkJoinPool.commonPool()` sized to `availableProcessors`, even a handful of blocking tasks saturates the pool — all other tasks queue.
+
+```mermaid
+sequenceDiagram
+    participant Pool as ForkJoinPool (8 threads)
+    participant T as Thread-1
+    participant API as Remote API
+
+    Note over Pool,API: ❌ Blocking — thread pinned during I/O wait
+    Pool->>T: assign task
+    T->>API: getOrders() [HTTP request]
+    Note over T: 🔒 blocked — holds OS thread<br/>other tasks queue up
+    API-->>T: response (1s later)
+    T-->>Pool: release thread
+
+    Note over Pool,API: ✅ Non-Blocking — thread released immediately
+    Pool->>T: assign task
+    T->>API: httpClient.get() [async]
+    T-->>Pool: release thread immediately
+    Note over Pool: thread free for other work
+    API-->>Pool: callback fires on completion
+```
 
 ```scala
-import scala.concurrent._
-import ExecutionContext.Implicits.global
-
-val session = orderApi.createSession("user-001@duwamish.com", "password")
-
+// ❌ Naive: blocks a ForkJoinPool thread during HTTP wait
 val f: Future[List[Order]] = Future {
-  session.getOrders()
+  session.getOrders()   // thread pinned here waiting for network I/O
 }
 ```
 
-Thread will be waiting till the response arrives from API,
-which means CPU is not doing any work during that time, so can be
-hired for uber driving(with another `thread`) in between.
-
-**To better utilize the CPU until the response arrives**, we should not
-block the rest of the program– this computation should be scheduled
-asynchronously.
-
-The `Future.apply` method does exactly that– it performs
-the specified computation block concurrently, in this case sending a
-request to the server (maybe HTTP) and waiting for a response.
-
-
-Callbacks
----------
-
-- from a performance point of view a better way to do it is in a
-completely non-blocking way, by registering a callback on the future.
-
-- This callback is called asynchronously once the future is completed.
-
-The `thenAccept` combinator is used purely for side-effecting purposes.
-
-- number of process = [10 to 16]/ 8 CPUs
-- each process takes = 1 secs
-- total time = ~3secs (8 CPUs can take 8 tasks + rest of 2 tasks will wait till 2 CPUs are free + 1sec)
-
-on a machine with
-- 8 cores,
-- 4G heap size
-
-```
-$ sbt "runMain BlockingTasksWithGlobalExecutionContext"
-[info] Running BlockingTasksWithGlobalExecutionContext
-[run-main-0]-Firing data1
-[run-main-0]-Firing data2
-[run-main-0]-Firing data3
-[run-main-0]-Firing data4
-[run-main-0]-Firing data5
-[run-main-0]-Firing data6
-[run-main-0]-Firing data7
-[run-main-0]-Firing data8
-[run-main-0]-Firing data9
-[run-main-0]-Firing data10
-[scala-execution-context-global-62]-[Thread-scala-execution-context-global-61] data data1 is processed.
-[scala-execution-context-global-62]-[Thread-scala-execution-context-global-62] data data2 is processed.
-[scala-execution-context-global-62]-[Thread-scala-execution-context-global-63] data data3 is processed.
-[scala-execution-context-global-62]-[Thread-scala-execution-context-global-64] data data4 is processed.
-[scala-execution-context-global-62]-[Thread-scala-execution-context-global-66] data data5 is processed.
-[scala-execution-context-global-62]-[Thread-scala-execution-context-global-67] data data6 is processed.
-[scala-execution-context-global-62]-[Thread-scala-execution-context-global-65] data data7 is processed.
-[scala-execution-context-global-62]-[Thread-scala-execution-context-global-68] data data8 is processed.
-[scala-execution-context-global-62]-[Thread-scala-execution-context-global-61] data data9 is processed.
-[scala-execution-context-global-62]-[Thread-scala-execution-context-global-62] data data10 is processed.
-[success] Total time: 3 s, completed Apr 1, 2018 2:09:07 AM
+```scala
+// ✅ Better: non-blocking — registers a callback, releases the thread immediately
+httpClient.get("/orders").thenAccept { orders =>
+  // runs on a callback thread when response arrives
+}
 ```
 
-for 100 tasks
-time taken should be = (100/CPUs) + ~1sec = 96 threads in 12 batches + 4 in another batch + 1 secs
+### Key Combinators (Java `CompletableFuture` / Scala `Future`)
 
-```
-$ sbt "runMain BlockingTasksWithGlobalExecutionContext"
-[info] Loading global plugins from /Users/a1353612/.sbt/0.13/plugins
-[info] Loading project definition from /Users/a1353612/buybest/sc212/parallel-programming/1-seq-vs-parallel/project
-[info] Set current project to seq-vs-parallel (in build file:/Users/a1353612/buybest/sc212/parallel-programming/1-seq-vs-parallel/)
-[info] Running BlockingTasksWithGlobalExecutionContext
-[run-main-0]-Firing data-1
-[run-main-0]-Firing data-2
-[run-main-0]-Firing data-3
-[run-main-0]-Firing data-4
-[run-main-0]-Firing data-5
-[run-main-0]-Firing data-6
-[run-main-0]-Firing data-7
-[run-main-0]-Firing data-8
-[run-main-0]-Firing data-9
-[run-main-0]-Firing data-10
-[run-main-0]-Firing data-11
-[run-main-0]-Firing data-12
-[run-main-0]-Firing data-13
-[run-main-0]-Firing data-14
-[run-main-0]-Firing data-15
-[run-main-0]-Firing data-16
-[run-main-0]-Firing data-17
-[run-main-0]-Firing data-18
-[run-main-0]-Firing data-19
-[run-main-0]-Firing data-20
-[run-main-0]-Firing data-21
-[run-main-0]-Firing data-22
-[run-main-0]-Firing data-23
-[run-main-0]-Firing data-24
-[run-main-0]-Firing data-25
-[run-main-0]-Firing data-26
-[run-main-0]-Firing data-27
-[run-main-0]-Firing data-28
-[run-main-0]-Firing data-29
-[run-main-0]-Firing data-30
-[run-main-0]-Firing data-31
-[run-main-0]-Firing data-32
-[run-main-0]-Firing data-33
-[run-main-0]-Firing data-34
-[run-main-0]-Firing data-35
-[run-main-0]-Firing data-36
-[run-main-0]-Firing data-37
-[run-main-0]-Firing data-38
-[run-main-0]-Firing data-39
-[run-main-0]-Firing data-40
-[run-main-0]-Firing data-41
-[run-main-0]-Firing data-42
-[run-main-0]-Firing data-43
-[run-main-0]-Firing data-44
-[run-main-0]-Firing data-45
-[run-main-0]-Firing data-46
-[run-main-0]-Firing data-47
-[run-main-0]-Firing data-48
-[run-main-0]-Firing data-49
-[run-main-0]-Firing data-50
-[run-main-0]-Firing data-51
-[run-main-0]-Firing data-52
-[run-main-0]-Firing data-53
-[run-main-0]-Firing data-54
-[run-main-0]-Firing data-55
-[run-main-0]-Firing data-56
-[run-main-0]-Firing data-57
-[run-main-0]-Firing data-58
-[run-main-0]-Firing data-59
-[run-main-0]-Firing data-60
-[run-main-0]-Firing data-61
-[run-main-0]-Firing data-62
-[run-main-0]-Firing data-63
-[run-main-0]-Firing data-64
-[run-main-0]-Firing data-65
-[run-main-0]-Firing data-66
-[run-main-0]-Firing data-67
-[run-main-0]-Firing data-68
-[run-main-0]-Firing data-69
-[run-main-0]-Firing data-70
-[run-main-0]-Firing data-71
-[run-main-0]-Firing data-72
-[run-main-0]-Firing data-73
-[run-main-0]-Firing data-74
-[run-main-0]-Firing data-75
-[run-main-0]-Firing data-76
-[run-main-0]-Firing data-77
-[run-main-0]-Firing data-78
-[run-main-0]-Firing data-79
-[run-main-0]-Firing data-80
-[run-main-0]-Firing data-81
-[run-main-0]-Firing data-82
-[run-main-0]-Firing data-83
-[run-main-0]-Firing data-84
-[run-main-0]-Firing data-85
-[run-main-0]-Firing data-86
-[run-main-0]-Firing data-87
-[run-main-0]-Firing data-88
-[run-main-0]-Firing data-89
-[run-main-0]-Firing data-90
-[run-main-0]-Firing data-91
-[run-main-0]-Firing data-92
-[run-main-0]-Firing data-93
-[run-main-0]-Firing data-94
-[run-main-0]-Firing data-95
-[run-main-0]-Firing data-96
-[run-main-0]-Firing data-97
-[run-main-0]-Firing data-98
-[run-main-0]-Firing data-99
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-70] data data-1 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-71] data data-2 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-72] data data-3 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-73] data data-4 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-74] data data-5 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-76] data data-6 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-75] data data-7 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-77] data data-8 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-70] data data-9 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-73] data data-10 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-77] data data-11 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-75] data data-12 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-72] data data-13 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-76] data data-14 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-74] data data-15 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-71] data data-16 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-70] data data-17 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-72] data data-18 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-77] data data-19 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-73] data data-20 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-76] data data-21 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-74] data data-22 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-71] data data-23 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-75] data data-24 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-70] data data-25 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-77] data data-26 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-72] data data-27 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-76] data data-28 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-74] data data-29 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-71] data data-30 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-73] data data-31 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-75] data data-32 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-74] data data-33 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-70] data data-34 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-76] data data-35 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-71] data data-36 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-73] data data-37 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-77] data data-38 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-72] data data-39 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-75] data data-40 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-71] data data-41 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-73] data data-42 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-70] data data-43 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-76] data data-44 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-74] data data-45 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-77] data data-46 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-72] data data-47 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-75] data data-48 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-73] data data-49 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-71] data data-50 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-74] data data-51 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-76] data data-52 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-77] data data-53 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-70] data data-54 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-75] data data-55 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-72] data data-56 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-76] data data-57 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-74] data data-58 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-71] data data-59 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-77] data data-60 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-73] data data-61 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-70] data data-62 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-75] data data-63 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-72] data data-64 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-70] data data-65 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-76] data data-66 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-77] data data-67 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-71] data data-68 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-74] data data-69 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-73] data data-70 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-72] data data-71 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-75] data data-72 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-77] data data-73 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-70] data data-74 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-74] data data-75 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-76] data data-76 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-73] data data-77 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-71] data data-78 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-72] data data-79 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-75] data data-80 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-70] data data-81 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-74] data data-82 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-73] data data-83 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-76] data data-84 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-71] data data-85 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-72] data data-86 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-75] data data-87 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-77] data data-88 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-71] data data-89 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-75] data data-90 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-70] data data-91 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-73] data data-92 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-72] data data-93 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-76] data data-94 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-74] data data-95 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-77] data data-96 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-73] data data-97 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-71] data data-98 is processed.
-[scala-execution-context-global-73]-[Thread-scala-execution-context-global-75] data data-99 is processed.
-[success] Total time: 14 s, completed Apr 1, 2018 2:27:18 AM
+| Combinator | Use |
+|---|---|
+| `thenApply` / `map` | Transform result (non-blocking) |
+| `thenCompose` / `flatMap` | Chain dependent async calls |
+| `thenAccept` / `foreach` | Side-effecting terminal (non-blocking) |
+| `thenCombine` / `zip` | Merge two independent futures |
+
+### Scala ForkJoinPool & Blocking Compensation
+
+In Scala, `ForkJoinPool` can *expand* its thread count beyond `parallelismLevel` when tasks declare `scala.concurrent.blocking { ... }`. This prevents pool starvation at the cost of higher thread count:
+
+```scala
+import scala.concurrent.blocking
+
+Future {
+  blocking {
+    session.getOrders()   // pool spawns a compensating thread — won't starve others
+  }
+}
 ```
 
-![](parallel.png)
+**Use this only when you cannot refactor to a truly async client.** Unbounded thread expansion under high load leads to context-switch storms and heap pressure.
 
-bulkheading (of ship) and work sharing
-----------------------------
+---
 
-The `actor.dispatcher` will pick an actor and assign it a dormant thread from it’s pool
-when there are events in the `Actor`'s mailbox.
+## 5. Thread Pool Strategies
 
-- https://docs.microsoft.com/en-us/azure/architecture/patterns/bulkhead
+Three common pool types and when to choose each:
 
-`thread-pool-executor`
-------------------------
+| Pool | Behaviour | Best For |
+|---|---|---|
+| `FixedThreadPool` | Fixed N threads, unbounded queue | CPU-bound work with predictable load |
+| `CachedThreadPool` | Unbounded threads, 60s keepalive | Short-lived, bursty I/O tasks (risk: thread explosion) |
+| `ForkJoinPool` | Work-stealing, configurable parallelism | Recursive divide-and-conquer; mixed CPU+blocking with compensation |
 
-use `thread-pool-executor` if you want your thread pool to have dynamic nature.
+Reference: [FixedThreadPool vs CachedThreadPool vs ForkJoinPool](https://zeroturnaround.com/rebellabs/fixedthreadpool-cachedthreadpool-or-forkjoinpool-picking-correct-java-executors-for-background-tasks/)
 
-[fork-join-executor](https://github.com/shekhargulati/52-technologies-in-2016/blob/master/41-akka-dispatcher/README.md#the-default-dispatcher)
+### Akka Dispatcher Configuration
 
-`fork-join-executor` allows you to have a static thread pool configuration 
-where number of threads will be between parallelism-min and parallelism-max bounds
+Akka lets you tune per-actor-system or per-actor dispatcher:
 
-```
+```hocon
 default-dispatcher {
-      type = "Dispatcher"
+  type = "Dispatcher"
 
-      executor = "fork-join-executor"
+  # Work-stealing pool — static bounds, good for CPU-bound actors
+  executor = "fork-join-executor"
+  fork-join-executor {
+    parallelism-min    = 8
+    parallelism-factor = 3.0   # threads = factor × cores, clamped to [min, max]
+    parallelism-max    = 64
+  }
 
-      fork-join-executor {
-        parallelism-min = 8
-        parallelism-factor = 3.0
-        parallelism-max = 64
-      }
+  # Use thread-pool-executor for I/O-heavy actors needing dynamic sizing
+  # executor = "thread-pool-executor"
+  # thread-pool-executor { fixed-pool-size = 32 }
 
-      shutdown-timeout = 1s
-
-      throughput = 5
+  throughput     = 5       # messages processed per thread before yielding
+  shutdown-timeout = 1s
 }
 ```
 
-[Fork/Join framework](https://docs.oracle.com/javase/tutorial/essential/concurrency/forkjoin.html)
---------------------
+**Rule of thumb:**
+- `fork-join-executor` → CPU-bound / compute actors with known concurrency bounds
+- `thread-pool-executor` → I/O-bound actors where dynamic sizing is needed
 
-The `fork/join` framework is an implementation of the `ExecutorService` interface that helps you
-take advantage of multiple processors. 
+---
 
-- It is designed for work that can be broken into smaller pieces recursively. 
-- The goal is to use all the available processing power to 
-enhance the performance of your application.
+## 6. Fork/Join Framework — Deep Dive
 
-[How is the fork/join framework better than a thread pool?](https://stackoverflow.com/a/7928815/432903)
+`ForkJoinPool` ([JDK docs](https://docs.oracle.com/javase/tutorial/essential/concurrency/forkjoin.html)) implements `ExecutorService` with a **work-stealing** scheduler:
 
-https://zeroturnaround.com/rebellabs/fixedthreadpool-cachedthreadpool-or-forkjoinpool-picking-correct-java-executors-for-background-tasks/
+1. **Fork** — split a large task into independent sub-tasks, push to own deque.
+2. **Join** — wait for sub-tasks to complete, combine results.
+3. **Work-steal** — idle workers steal tasks from the *tail* of busy workers' deques, minimising lock contention.
+
+```mermaid
+graph TD
+    ROOT["RecursiveTask(sum 1..N)"]
+    ROOT --> L["sum(1..N/2)"]
+    ROOT --> R["sum(N/2..N)"]
+    L --> LL["sum(1..N/4)"]
+    L --> LR["sum(N/4..N/2)"]
+    R --> RL["sum(N/2..3N/4)"]
+    R --> RR["sum(3N/4..N)"]
+    LL --> LL1["base case"]
+    LL --> LL2["base case"]
+    LR --> LR1["base case"]
+    LR --> LR2["base case"]
+    RL --> RL1["base case"]
+    RL --> RL2["base case"]
+    RR --> RR1["base case"]
+    RR --> RR2["base case"]
+
+    style ROOT fill:#4a90d9,color:#fff,stroke:#2c6fad
+    style L fill:#5ba85a,color:#fff,stroke:#3d7a3c
+    style R fill:#5ba85a,color:#fff,stroke:#3d7a3c
+    style LL fill:#e8a838,color:#fff,stroke:#b07d20
+    style LR fill:#e8a838,color:#fff,stroke:#b07d20
+    style RL fill:#e8a838,color:#fff,stroke:#b07d20
+    style RR fill:#e8a838,color:#fff,stroke:#b07d20
+```
+
+**When Fork/Join wins:**
+- Recursive algorithms: merge sort, tree traversal, matrix multiply
+- Tasks have roughly equal cost (imbalanced trees degrade to sequential)
+- N >> cores (enough granularity for work-stealing to matter)
+
+**When it doesn't:**
+- Tasks with heavy I/O (blocking pollutes the pool — see §4)
+- Tasks with significant coordination / shared mutable state
+
+See: [How is Fork/Join better than a thread pool?](https://stackoverflow.com/a/7928815/432903)
+
+---
+
+## 7. Actor Model — Shared-Nothing Parallelism
+
+The Actor model achieves parallelism through **message-passing** with no shared mutable state:
+
+> *"Individual processes (actors) send messages asynchronously to each other. There is (in theory) no shared state. If shared state is the root of all evil, the actor model becomes very attractive."*
+> — [Stack Overflow](https://stackoverflow.com/a/3587250/432903)
+
+Key properties relevant to L6+ design decisions:
+
+| Property | Implication |
+|---|---|
+| Mailbox per actor | Natural backpressure point; bounded mailboxes prevent OOM |
+| Location transparency | Same code works local or distributed (Akka Cluster, Erlang distribution) |
+| Supervision trees | Fault isolation without `try/catch` scattered across callsites |
+| No shared state | Eliminates lock contention — scales linearly with partition count |
+
+**Erlang/JVM mapping:** Erlang processes are green threads scheduled by the BEAM VM, not OS threads. JVM actors (Akka) are multiplexed onto a ForkJoinPool. The dispatcher assigns a thread from the pool to an actor only while it has messages — then releases it.
+
+```mermaid
+sequenceDiagram
+    participant S as Sender Actor
+    participant MB as Receiver Mailbox
+    participant D as Dispatcher (ForkJoinPool)
+    participant R as Receiver Actor
+
+    S->>MB: send(Message)
+    Note over S: fire-and-forget,<br/>no shared state
+    MB->>D: notify — message available
+    D->>R: assign thread + dequeue message
+    R->>R: process(Message)
+    Note over R: single-threaded per actor<br/>no locks needed
+    R->>D: release thread
+    Note over D: thread returns to pool<br/>for other actors
+```
+
+References:
+- [Erlang processes vs kernel threads](https://stackoverflow.com/a/605631/432903)
+- [Akka JVM threads vs OS threads during I/O](https://stackoverflow.com/a/7458958/432903)
+- [Project Loom — JVM virtual threads](https://cr.openjdk.java.net/~rpressler/loom/Loom-Proposal.html)
+
+---
+
+## 8. Bulkhead Pattern — Fault Isolation
+
+Named after watertight compartments in a ship's hull: **isolate failures so one overloaded subsystem cannot sink others**.
+
+In thread-pool terms: assign separate, bounded pools to distinct workload classes (e.g., payment processing vs. recommendation engine). A spike in one doesn't exhaust threads for the other.
+
+```mermaid
+graph LR
+    Client["Incoming Requests"]
+
+    Client -->|payment req| PP
+    Client -->|search req| SP
+    Client -->|rec req| RP
+
+    subgraph Bulkhead["Isolated Thread Pools"]
+        PP["Payment Pool\n16 threads · queue: 100"]
+        SP["Search Pool\n32 threads · queue: 500"]
+        RP["Recs Pool\n8 threads · queue: 200"]
+    end
+
+    PP -->|bounded| PaySvc["Payment Service"]
+    SP -->|bounded| SearchSvc["Search Service"]
+    RP -->|bounded| RecSvc["Rec Service"]
+
+    style PP fill:#d9534f,color:#fff,stroke:#a02020
+    style SP fill:#5ba85a,color:#fff,stroke:#3d7a3c
+    style RP fill:#4a90d9,color:#fff,stroke:#2c6fad
+```
+
+Reference: [Azure Bulkhead Pattern](https://docs.microsoft.com/en-us/azure/architecture/patterns/bulkhead)
+
+---
+
+## 9. Benchmark: Blocking Tasks on ForkJoinPool
+
+**Setup:** 8-core machine, 4 GB heap, `ExecutionContext.Implicits.global` (backed by `ForkJoinPool(parallelism=8)`), each task sleeps 1 second.
+
+| Tasks | Expected Wall Time | Observed |
+|---|---|---|
+| 10 | ⌈10/8⌉ × 1s = **2s** | **3s** |
+| 100 | ⌈100/8⌉ × 1s = **13s** | **14s** |
+
+**Interpretation:**
+
+- Wall time ≈ `ceil(N / cores) × task_duration` — confirms true parallel batching.
+- The extra ~1s overhead is scheduling latency + JVM warm-up, not a concurrency bug.
+- 8 threads consumed in parallel per batch; remaining tasks queue until a thread frees.
+- At 100 tasks: 12 full batches of 8 (96 tasks, 12s) + 1 batch of 4 (1s) + overhead ≈ 14s. ✓
+
+**Scale-out signal:** If observed time exceeds `ceil(N/cores) × task_duration` by more than ~10%, investigate: lock contention, GC pressure, or pool starvation from unguarded blocking calls.
+
+---
+
+## 10. Key Decision Framework
+
+```mermaid
+flowchart TD
+    A["What is the workload type?"] --> B{CPU-bound or I/O-bound?}
+
+    B -->|CPU-bound| C{Recursively\ndivisible?}
+    C -->|Yes| C1["ForkJoinPool\n+ RecursiveTask"]
+    C -->|No| C2["FixedThreadPool\nsized to core count"]
+
+    B -->|I/O-bound| D{Async client\navailable?}
+    D -->|Yes| D1["Non-blocking\nFuture / CompletableFuture\n+ callbacks"]
+    D -->|No| D2{Need fault\nisolation?}
+    D2 -->|Yes| D2a["Bulkhead:\nseparate pool\nper workload class"]
+    D2 -->|No| D2b["scala.concurrent.blocking{}\nor dedicated I/O pool"]
+
+    A --> E{Need location\ntransparency\nor supervision?}
+    E -->|Yes| E1["Actor Model\nAkka / Erlang"]
+
+    A --> F{Partition-level\nparallelism\nat scale?}
+    F -->|Yes| F1["Kafka Streams\nor Spark RDDs"]
+
+    style C1 fill:#5ba85a,color:#fff,stroke:#3d7a3c
+    style C2 fill:#5ba85a,color:#fff,stroke:#3d7a3c
+    style D1 fill:#5ba85a,color:#fff,stroke:#3d7a3c
+    style D2a fill:#5ba85a,color:#fff,stroke:#3d7a3c
+    style D2b fill:#5ba85a,color:#fff,stroke:#3d7a3c
+    style E1 fill:#4a90d9,color:#fff,stroke:#2c6fad
+    style F1 fill:#4a90d9,color:#fff,stroke:#2c6fad
+```
+
+---
+
+## 11. Further Reading
+
+| Topic | Link |
+|---|---|
+| Parallelism vs. Concurrency (Haskell wiki) | https://wiki.haskell.org/Parallelism |
+| Cats Effect concurrency basics | https://typelevel.org/cats-effect/concurrency/basics.html |
+| ForkJoinPool deep dive | https://docs.oracle.com/javase/tutorial/essential/concurrency/forkjoin.html |
+| Choosing the right Java executor | https://zeroturnaround.com/rebellabs/fixedthreadpool-cachedthreadpool-or-forkjoinpool-picking-correct-java-executors-for-background-tasks/ |
+| Akka default dispatcher internals | https://github.com/shekhargulati/52-technologies-in-2016/blob/master/41-akka-dispatcher/README.md#the-default-dispatcher |
+| Project Loom (JVM virtual threads) | https://cr.openjdk.java.net/~rpressler/loom/Loom-Proposal.html |
+| Azure Bulkhead pattern | https://docs.microsoft.com/en-us/azure/architecture/patterns/bulkhead |
+| Kafka Streams architecture | http://docs.confluent.io/current/streams/architecture.html#stream-partitions-and-tasks |

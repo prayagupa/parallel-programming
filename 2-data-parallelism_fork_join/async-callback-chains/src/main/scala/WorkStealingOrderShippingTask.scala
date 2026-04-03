@@ -1,7 +1,7 @@
 import java.util.UUID
 import java.util.concurrent.{ForkJoinPool, ForkJoinTask, RecursiveAction, TimeUnit}
 
-import scala.collection.JavaConverters
+import scala.jdk.CollectionConverters.*
 
 /**
   * submit 100 tasks to a pool of threads 100
@@ -49,7 +49,7 @@ class WorkStealingOrderShippingTask(orders: Seq[OrderReceived]) extends Recursiv
       val task1 = new WorkStealingOrderShippingTask(orders.slice(0, mid))
       val task2 = new WorkStealingOrderShippingTask(orders.slice(mid, orders.length))
 
-      ForkJoinTask.invokeAll(JavaConverters.asJavaCollection(List(task1, task2)))
+      ForkJoinTask.invokeAll(List(task1, task2).asJava)
 
     } else {
       shipOrders(orders)

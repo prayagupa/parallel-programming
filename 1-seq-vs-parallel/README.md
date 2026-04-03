@@ -1,605 +1,910 @@
-Process
---------
+# Concurrency & Parallelism
 
-- A process is a program in execution. 
-- A process is an execution environment that consists of instructions, user-data, 
-and system-data segments, as well as lots of other resources such as CPU, memory, 
-address-space, disk and network I/O acquired at runtime. 
-- A program can have several copies of it running at the same time but 
-a process necessarily belongs to only one program.
+> Depth of knowledge expected at Staff+ roles.  
+> Covers OS internals, JVM threading model, Java Memory Model, virtual threads, and production patterns.
+
+---
+
+## Table of Contents
+
+1. [Process vs Thread](#1-process-vs-thread)
+2. [Thread Internals — How the OS Sees a Thread](#2-thread-internals--how-the-os-sees-a-thread)
+3. [JVM Threading Model](#3-jvm-threading-model)
+4. [Thread Lifecycle & State Machine](#4-thread-lifecycle--state-machine)
+5. [Thread Scheduling](#5-thread-scheduling)
+6. [Java Memory Model (JMM)](#6-java-memory-model-jmm)
+7. [Synchronization Primitives & Hazards](#7-synchronization-primitives--hazards)
+8. [CPU-Bound vs I/O-Bound Work](#8-cpu-bound-vs-io-bound-work)
+9. [Concurrency Models — Thread-per-Request vs Event Loop vs Virtual Threads](#9-concurrency-models--thread-per-request-vs-event-loop-vs-virtual-threads)
+10. [Platform Threads — Deep Dive](#10-platform-threads--deep-dive)
+11. [Virtual Threads (Java 21) — Deep Dive](#11-virtual-threads-java-21--deep-dive)
+12. [Sequential vs Parallel Execution](#12-sequential-vs-parallel-execution)
+13. [Hardware — Hyper-Threading & Clock Rate](#13-hardware--hyper-threading--clock-rate)
+14. [Production Patterns & Anti-Patterns](#14-production-patterns--anti-patterns)
+
+---
+
+## 1. Process vs Thread
+
+### Process
+
+A **process** is a program in execution — an isolated execution environment with its own:
+- Virtual address space (code, stack, heap, data segments)
+- File descriptors, sockets, signal handlers
+- OS-level resources: CPU time, memory pages, I/O handles
+
+A program can run as multiple concurrent processes (e.g. multiple JVM instances), but each process owns its resources exclusively. Context switching between processes is expensive because the OS must swap the entire address space (TLB flush, page-table reload).
 
 ```bash
 $ ps
-  PID TTY           TIME CMD
- 1674 ttys000    0:01.70 -bash
-11378 ttys000    1:55.53 docker run -p 27017:27017 -it mongodb --net=host
-34745 ttys001    8:41.88 /Library/Java/JavaVirtualMachines/jdk-12.0.1.jdk/Contents/Home/bin/java -agentlib:jdwp=transport=dt_sock
-50600 ttys001    3:32.81 /usr/bin/jshell
-50638 ttys002    1:05.57 /usr/bin/jconsole
-34772 ttys003    0:00.06 /System/Library/Frameworks/Python.framework/Versions/2.7/Resources/Python.app/Contents/MacOS/Python
+  PID TTY       TIME    CMD
+ 1674 ttys000   0:01.70 -bash
+11378 ttys000   1:55.53 docker run -p 27017:27017 -it mongodb
+34745 ttys001   8:41.88 java -agentlib:jdwp=... MyApp
+50600 ttys001   3:32.81 /usr/bin/jshell
 ```
 
-Thread
-------
+### Thread
 
-- Thread is the smallest unit of execution in a process. 
-- A thread simply executes instructions serially. 
-- A process can have multiple threads running as part of it. 
-- Usually, there would be some state associated with the process that is shared among all the threads and 
-in turn each thread would have some state private to itself. The globally shared state(heap) amongst the threads 
-of a process is visible and accessible to all the threads, and special attention needs to be paid when any thread 
-tries to read or write to this global shared state. 
-- There are several constructs offered by various programming languages to guard and 
-discipline the access to this global state.
-- All thread in java are native Linux threads, a.k.a `pthreads`(POSIX)
-- use of multithreading increases [throughput along with the increased responsiveness (latency).](https://docs.microsoft.com/en-us/dotnet/standard/threading/threads-and-threading)
+A **thread** is the smallest schedulable unit inside a process.
 
-Concurrency
------------
+- Threads within a process **share** heap, code segment, open file descriptors, and static data.
+- Each thread has its own **private** program counter, register set, and stack.
+- Inter-thread communication is cheap (shared memory) but requires careful synchronization.
+- In Java, all threads are native Linux threads — **pthreads** (POSIX threads) under the hood.
 
-- A concurrent program is one that can be decomposed into constituent parts and each part 
-can be executed out of order or in partial order without affecting the final outcome. 
--  concurrency is a property of a program
+```mermaid
+graph TD
+    subgraph Process["Process (JVM)"]
+        direction TB
+        H["Heap (shared)"]
+        CS["Code Segment (shared)"]
+        FD["File Descriptors (shared)"]
+        T1["Thread 1\n(own stack + PC)"]
+        T2["Thread 2\n(own stack + PC)"]
+        T3["Thread 3\n(own stack + PC)"]
+    end
 
-[Thread scheduling](https://en.wikipedia.org/wiki/Thread_(computing)#Scheduling)
-------------
+    T1 <-->|read/write| H
+    T2 <-->|read/write| H
+    T3 <-->|read/write| H
 
-OS schedules threads either `pre-emptively` or `co-operatively`. 
-
-| Pre-emptive multithreading                                                      | Co-operative multithreading  |
-|---------------------------------------------------------------------------------|----------------------------|
-| it allows the OS to determine when a context switch should occur.|               relies on the threads themselves to relinquish control once they are at a stopping point.   |
-| disadvantage of preemptive multithreading is that the system may make a context switch at an inappropriate time, causing lock convoy, priority inversion or other negative effects, which may be avoided by cooperative multithreading.| This can create problems if a thread is waiting for a resource to become available.  |
-|                                                                  | is used with `await` in languages with a single-threaded event-loop in their runtime, like js or Python |
-
-Normally use pre-emptive. 
-[If you find your design has a lot of thread-switching overhead, cooperative threads would be a possible optimization.](https://stackoverflow.com/a/4147474/432903)
-
-[Thread Execution Model](https://www.3dgep.com/cuda-thread-execution-model/)
----------------
-
-- a set of C-function library call/ [posix_thread](https://en.wikipedia.org/wiki/POSIX_Threads)
-
-    % [Static vs. dynamic scheduling](https://courses.cs.washington.edu/courses/cse471/02au/lectures/dyn1.pdf)
-    
-    % [Dynamic scheduling, scoreboarding](http://ece-research.unm.edu/jimp/611/slides/chap4_3.html)
-
-    % [OpenMP Scheduling Loops](http://cs.umw.edu/~finlayson/class/fall14/cpsc425/notes/12-scheduling.html) - [CPSC 425: Parallel Computing, University of Mary Washington](http://cs.umw.edu/~finlayson/class/fall14/cpsc425/)
-    
-    % [Difference between static and dynamic schedule in openMP in C](http://stackoverflow.com/a/5864834/432903)
-    
-- scalac/javac concurrency library `java.util.concurrent`/ `scala.concurrent`
-
-//Static vs Dynamic Loop scheduling in OpenMp
-
-Static Loop Scheduling           | Dynamic Loop Scheduling | Guided Loop Scheduling 
------------------ | ------------------------- | --------------------------------------
-|All iterations are allocated to threads -> before they execute any iterations | Some of the iterations allocated to threads -> at start of execution. Threads that complete their iterations are eligible to get additional work. | Large chunks initially assigned to Threads, Additional chunks of progressively smaller size assigned dynamically to Threads as needed
-| has low overhead, but may have high load imbalance. | has higher overhead, but can reduce load imbalance. | 
-| # pragma omp parallel for private(tid) schedule(static, ChunkSize) | # pragma omp parallel for private(tid) schedule(dynamic, ChunkSize) | schedule(guided)
-
-[Thread states](https://docs.oracle.com/javase/7/docs/api/java/lang/Thread.State.html) JWN, 07-2016, SPLK 2019
---------------
-
-| state        | description  |
-|--------------| ------------ |
-|NEW           | A thread has **not yet started**. |
-|RUNNABLE      | A thread **executing in the Java virtual Machine**.     |
-|              |                                                                      |
-|BLOCKED       | A thread **blocked waiting** for a [monitor lock - syncd](https://stackoverflow.com/a/15680550/432903) |
-|WAITING       | A thread **waiting indefinitely** for another thread to perform a particular action. |
-|              | thread can go to `WAITING` state for three reasons `Object.wait`, `Thread.join`, `LockSupport.park` (causes `Parking`) |
-|TIMED_WAITING | A thread **waiting for another thread** to perform an action for up to a specified waiting time. (`Thread.sleep(n)`)|
-| TERMINATED   | A thread that has exited.|
-
-![](RUNNABLE.png)
-![](TIMED_WAITING.png)
-
-```bash
-                   RUNNABLE 
-NEW ~~~~~~~~~~~~~> BLOCKED  ~~~~~~~~~~~~~~~~> TERMINATED
-                   WAITING
-                   TIMED_WAITING
+    style H fill:#E65100,color:#fff
+    style T1 fill:#1565C0,color:#fff
+    style T2 fill:#1565C0,color:#fff
+    style T3 fill:#1565C0,color:#fff
 ```
 
-[Thread Blocking](https://docs.oracle.com/en/java/javase/11/docs/api/java.base/java/util/concurrent/locks/LockSupport.html)
-----
+### Process vs Thread — Side-by-Side
 
-See https://stackoverflow.com/a/51788005/432903
+| Dimension         | Process                                       | Thread                                               |
+|-------------------|-----------------------------------------------|------------------------------------------------------|
+| Address space     | Isolated (own virtual memory)                 | Shared within the process                            |
+| Creation cost     | High (~ms, OS syscall + copy-on-write fork)   | Lower (~µs for platform thread, ~ns for virtual)     |
+| Context switch    | Expensive (TLB flush, page-table swap)        | Cheaper (same address space, register swap only)     |
+| Communication     | IPC (pipes, sockets, shared memory with mmap) | Shared heap — direct but needs synchronization       |
+| Failure isolation | Process crash doesn't affect others           | Thread crash can kill the entire process             |
+| Scalability       | Limited by OS process limits                  | Limited by stack memory (platform) or heap (virtual) |
 
-| Action       | description  |
-|--------------| ------------ |
-| Park         | returns immediately if the permit is available, consuming it in the process; otherwise it may block | 
-|              | park serves as an optimization of a "busy wait" that does not waste as much time spinning |
-|              | `Parking` means suspending execution until permit is available. |
-| Unpark       | unpark makes the permit available, if it was not already available | 
+**References**
+- [What is a multithreaded application? — stackoverflow](https://stackoverflow.com/a/1313122/432903)
+- [Why do threads share the heap space? — stackoverflow](http://stackoverflow.com/a/3321554/432903)
+- [Multithreading and Thread Synchronization — nakov.com](http://www.nakov.com/inetjava/lectures/part-1-sockets/InetJava-1.3-Multithreading.html)
+- [Threads and threading — Microsoft docs](https://docs.microsoft.com/en-us/dotnet/standard/threading/threads-and-threading)
 
+---
 
-Java Memory Model
-----------------
-- set of rules according to which the compiler, the processor or 
-the runtime is permitted to reorder memory operations. 
+## 2. Thread Internals — How the OS Sees a Thread
 
-[Where is Thread Object created? Stack or JVM Heap Memory?](http://stackoverflow.com/a/19433994/432903) - I BBY, 2018
+### POSIX Threads (pthreads)
 
-```java
-jshell> var processor = new Thread() //new means allocated always in heap memory
-processor ==> Thread[Thread-1,5,main]
+On Linux/macOS, Java platform threads map 1-to-1 to kernel threads via **pthreads**. The kernel scheduler sees each Java thread as a native task.
+
+```mermaid
+graph LR
+    JT["java.lang.Thread\n(Java object on heap)"]
+    OS["pthread_t\n(kernel task_struct)"]
+    CPU["CPU Core\n(executes instructions)"]
+
+    JT -->|"JVM calls\npthread_create()"| OS
+    OS -->|"scheduled by\nLinux CFS"| CPU
+
+    style JT fill:#2E7D32,color:#fff
+    style OS fill:#6A1B9A,color:#fff
+    style CPU fill:#B71C1C,color:#fff
 ```
 
-starting a thread will create a [new stack for that thread](https://stackoverflow.com/a/19433542/432903)
+### What Lives Where in Memory
 
-![](https://i.stack.imgur.com/kKDL2.gif)
+```mermaid
+graph TD
+    subgraph NativeMemory["Native / Off-Heap Memory"]
+        NS1["Thread-1 Stack (~1 MB)\n– local vars, frames, return addrs"]
+        NS2["Thread-2 Stack (~1 MB)"]
+        NS3["Thread-N Stack (~1 MB)"]
+    end
+    subgraph JVMHeap["JVM Heap (GC-managed)"]
+        TO["Thread Object instances"]
+        SH["Shared objects (fields, arrays)"]
+    end
 
-[Why do threads share the heap space?](http://stackoverflow.com/a/3321554/432903), [Quantcast](https://www.glassdoor.com/Interview/Quantcast-Interview-RVW2072600.htm)
+    NS1 -.->|references| SH
+    NS2 -.->|references| SH
 
+    style NativeMemory fill:#1565C0,color:#fff
+    style JVMHeap fill:#E65100,color:#fff
 ```
-Because otherwise they would be processes. 
-That is the whole idea of threads, to share memory.
-```
 
-[How many threads can OS vs Java VM support?](https://stackoverflow.com/a/764096/432903)
+> **Key insight for Staff+:** The `Thread` *object* lives on the heap; the thread's *stack* lives in native memory. `new Thread()` is cheap (heap alloc), but `thread.start()` is expensive (OS syscall + stack allocation).
 
-**For OS,**
-
-```bash
-$ ulimit -a
-core file size          (blocks, -c) 0
-data seg size           (kbytes, -d) unlimited
-file size               (blocks, -f) unlimited
-max locked memory       (kbytes, -l) unlimited
-max memory size         (kbytes, -m) unlimited
-open files                      (-n) 256
-pipe size            (512 bytes, -p) 1
-stack size              (kbytes, -s) 8192
-cpu time               (seconds, -t) unlimited
-max user processes              (-u) 709
-virtual memory          (kbytes, -v) unlimited`
-
-# or
-launchctl limit
-	cpu         unlimited      unlimited      
-	filesize    unlimited      unlimited      
-	data        unlimited      unlimited      
-	stack       8388608        67104768       
-	core        0              unlimited      
-	rss         unlimited      unlimited      
-	memlock     unlimited      unlimited      
-	maxproc     709            1064           
-	maxfiles    256            unlimited  
-```
+### Thread Stack Limits
 
 ```bash
 $ ulimit -s
-8192
+8192          # 8 MB default per thread on macOS
+
+$ ulimit -a | grep "max user processes"
+max user processes  (-u) 2666
 ```
 
-ie. each of threads will get [8192K amount of memory (8MB)](https://stackoverflow.com/a/9211891/432903) assigned for it's stack.
+**For JVM (64-bit HotSpot):**
+```
+Default stack per thread = 1 MB
+1 GB RAM → ~1,024 simultaneous threads (before OOM)
 
-**For JVM,**
-
-Default Oracle 64 bit JVM has 1M stack size per thread which means,
-```bash
-1 GB RAM = 1024MB/ 1MB
-         = 1024 threads
+Tune with: java -Xss256k   # reduce per-thread stack
 ```
 
-To raise the number of concurrent threads you should 
-lower the default [StackSize(ss)](https://dzone.com/articles/java-what-limit-number-threads) `java -Xss 64k`
+**References**
+- [POSIX Threads — Wikipedia](https://en.wikipedia.org/wiki/POSIX_Threads)
+- [How many threads can OS vs JVM support? — stackoverflow](https://stackoverflow.com/a/764096/432903)
+- [Where is Thread Object created? Stack or JVM Heap? — stackoverflow](http://stackoverflow.com/a/19433994/432903)
+- [What is the limit of number of threads in Java? — DZone](https://dzone.com/articles/java-what-limit-number-threads)
+- [Each thread gets 8192K stack — stackoverflow](https://stackoverflow.com/a/9211891/432903)
 
-[How to catch an Exception from a thread (in JVM)](http://stackoverflow.com/questions/6546193/how-to-catch-an-exception-from-a-thread), JWN 2016
+---
 
-http://docs.oracle.com/javase/1.5.0/docs/api/java/lang/Thread.UncaughtExceptionHandler.html
+## 3. JVM Threading Model
+
+### Thread Object Memory Layout
 
 ```java
-var shipOrders = new Thread() {
-    public void run() {
-        
-        System.out.println("Shipping ...");
-        try {
-            Thread.sleep(1000);
-        } catch (InterruptedException e) {
-            System.out.println("Interrupted.");
-        }
+// Thread object → always allocated on the JVM heap
+var processor = new Thread(() -> { /* task */ });
+// processor ==> Thread[Thread-1, 5, main]
 
-        System.out.println("Shipping exception ...");
-        throw new RuntimeException("Items missing in the package.");
-    }
-};
+// thread.start() → OS syscall, creates native pthread, allocates kernel stack
+processor.start();
+```
 
-shipOrders.setUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
-                                           void uncaughtException(th: Thread, th: Throwable) {
-                                                System.out.println("Error shipping orders : " + th)
-                                           }
-                                       });
+### Why Threads Share the Heap
+
+> "Because otherwise they would be processes. That is the whole idea of threads — to share memory."
+
+This shared heap is the root cause of virtually every concurrency bug: **data races, visibility failures, ordering violations**.
+
+### Thread-Local Storage
+
+Each thread has private storage via `ThreadLocal<T>`:
+- Stored in a `ThreadLocalMap` held by the `Thread` object itself
+- Not inherited by child threads (use `InheritableThreadLocal` if needed)
+- **Danger with virtual threads:** `ThreadLocal` caches multiplied across millions of virtual threads cause significant GC pressure. Prefer `ScopedValue` (JDK 21 preview / JDK 23 final).
+
+### UncaughtExceptionHandler — Never Lose a Thread Failure
+
+```java
+var shipOrders = new Thread(() -> {
+    System.out.println("Shipping ...");
+    simulateWork();
+    throw new RuntimeException("Items missing in package.");
+});
+
+shipOrders.setUncaughtExceptionHandler((thread, ex) ->
+    log.error("Thread {} failed: {}", thread.getName(), ex.getMessage(), ex)
+);
+
 shipOrders.start();
 ```
 
-[sleep vs wait](http://stackoverflow.com/q/1036754/432903) JWN 07-2016
+> **Production rule:** Always set a `UncaughtExceptionHandler` on threads you create manually, and on `ThreadFactory` used in `ExecutorService`.
 
-`.sleep` | `.notify`(.publish)/ `.wait`(.subscribe)/ Observer pattern in OO
--------|----------------
-`sleep()` sends the Thread to sleep as it was before, it just packs the context and stops executing for a predefined time. | `wait()`, on the contrary, is a thread (or message) synchronization mechanism that allows you to notify a Thread of which you have no stored reference (nor care). 
-So in order to wake it up before the due time, you need to know the Thread reference. This is NOT a common situation in a multi-threaded environment. It's mostly used for time-synchronization (e.g. wake in exactly 3.5 seconds) and/or hard-coded fairness (just sleep for a while and let others threads work). | You can think of it as a publish-subscribe pattern (wait == subscribe and notify() == publish). Basically using notify() you are sending a message (that might even not be received at all and normally you don't care).
-To sum up, you normally use `sleep()` for time-syncronization | and `wait()` for multi-thread-synchronization.
-In `sleep()` the thread stops working for the specified duration. | In `wait()` the thread stops working until the object being waited-on is notified, generally by other threads.
+**References**
+- [How to catch an Exception from a thread — stackoverflow](http://stackoverflow.com/questions/6546193/how-to-catch-an-exception-from-a-thread)
+- [Thread.UncaughtExceptionHandler — Oracle docs](http://docs.oracle.com/javase/1.5.0/docs/api/java/lang/Thread.UncaughtExceptionHandler.html)
+- [Shutting down threads cleanly — javaspecialists.eu](http://www.javaspecialists.eu/archive/Issue056.html)
+- [Why are Thread.stop, Thread.suspend deprecated? — Oracle](http://docs.oracle.com/javase/1.5.0/docs/guide/misc/threadPrimitiveDeprecation.html)
 
-[`Runnable.run`(method call) vs `Thread.start`(start a thread)](http://stackoverflow.com/a/8579702/432903)
---------------
+---
 
-```
-Runnable.run() is executed on the calling thread, 
-just like any other method call. 
+## 4. Thread Lifecycle & State Machine
 
-Thread.start() is required to actually create a new thread 
-so that the runnable's run method is executed in parallel
-```
+### States
 
-User vs Daemon threads
-----------------
+| State | Description | Triggered by |
+|---|---|---|
+| `NEW` | Created, not yet started | `new Thread()` |
+| `RUNNABLE` | Executing on CPU **or** ready to run (OS scheduler decides) | `thread.start()` |
+| `BLOCKED` | Waiting to acquire a monitor lock (`synchronized`) | Contended `synchronized` block |
+| `WAITING` | Indefinitely waiting for notification | `Object.wait()`, `Thread.join()`, `LockSupport.park()` |
+| `TIMED_WAITING` | Waiting with a timeout | `Thread.sleep(n)`, `Object.wait(n)`, `LockSupport.parkNanos()` |
+| `TERMINATED` | Finished execution | `run()` returned or threw |
 
-- User/Non-Daemon threads are like front performers. 
-- [Daemon threads are like assistants.](https://stackoverflow.com/a/2213348/432903)
+### State Machine
 
-Assistants help performers to complete a job. When the job is completed, no help is needed 
-by performers to perform anymore. 
-
-As no help is needed the assistants leave the place. 
-So when the jobs of User/Non-Daemon threads is over, Daemon threads march away.
-
-- An example for user/non-daemon thread is the thread running the `main`.
-- Threads created by a user thread are user thread. 
-- When all of the user/non-daemon threads complete, daemon threads terminates automatically.
-
-[Shutting down threads cleanly](http://www.javaspecialists.eu/archive/Issue056.html)
-
-[Why Are `Thread.stop`, `Thread.suspend`, `Thread.resume` and `Runtime.runFinalizersOnExit` Deprecated?](http://docs.oracle.com/javase/1.5.0/docs/guide/misc/threadPrimitiveDeprecation.html)
-
-[src/main/java/blocking/GracefulInterruptionExample.java](src/main/java/blocking/GracefulInterruptionExample.java)
-
-[Hyper-threading technology](https://en.wikipedia.org/wiki/Hyper-threading)
-----------------
-
-```
-Architecturally, a processor with Hyper-Threading Technology consists of two logical processors per core, 
-each of which has its own processor architectural state. 
-
-Each logical processor can be individually halted, interrupted or directed to execute a specified thread, 
-independently from the other logical processor sharing the same physical core.
-
-$ sysctl -a | grep hw.
-hw.ncpu: 8
-hw.byteorder: 1234
-hw.memsize: 17179869184
-hw.activecpu: 8
-hw.targettype: 
-hw.physicalcpu: 4
-hw.physicalcpu_max: 4
-hw.logicalcpu: 8
-hw.logicalcpu_max: 8
+```mermaid
+stateDiagram-v2
+    [*] --> NEW : new Thread()
+    NEW --> RUNNABLE : thread.start()
+    RUNNABLE --> BLOCKED : contended synchronized block
+    BLOCKED --> RUNNABLE : lock acquired
+    RUNNABLE --> WAITING : Object.wait() / Thread.join() / LockSupport.park()
+    WAITING --> RUNNABLE : notify() / notifyAll() / interrupt()
+    RUNNABLE --> TIMED_WAITING : Thread.sleep(n) / wait(n) / parkNanos()
+    TIMED_WAITING --> RUNNABLE : timeout elapsed / interrupt()
+    RUNNABLE --> TERMINATED : run() returns or throws
 ```
 
-[Clock rate](https://en.wikipedia.org/wiki/Clock_rate)
+### `sleep` vs `wait` — Critical Distinction
+
+| | `Thread.sleep(n)` | `Object.wait()` |
+|---|---|---|
+| **Releases monitor lock?** | ❌ No — holds any locks it has | ✅ Yes — atomically releases the lock |
+| **Use case** | Time-based delay | Condition-variable signalling between threads |
+| **Woken by** | Timeout or `interrupt()` | `notify()` / `notifyAll()` / `interrupt()` |
+| **Pattern** | Time synchronization | Multi-thread coordination (producer-consumer) |
+
+### `LockSupport.park` / `unpark`
+
+Low-level primitive underlying `ReentrantLock`, `Semaphore`, `CountDownLatch`:
+
+| Action | Description |
+|---|---|
+| `park()` | Suspends thread until a permit is available; returns immediately if permit already held |
+| `unpark(thread)` | Grants a permit to the target thread, waking it if parked |
+
+> `park/unpark` is the mechanism behind virtual thread unmounting — when a VT blocks on I/O, the JVM calls `park()` on the virtual thread's continuation, freeing the carrier.
+
+### `Runnable.run()` vs `Thread.start()`
 
 ```
-The clock rate typically refers to the frequency at which a chip 
-like a central processing unit (CPU),one core of a multi-core processor, 
-is running and is used as an indicator of the processor's speed.
-
-It is measured in clock cycles per second or its equivalent, 
-the SI unit hertz (Hz)
-
-sysctl -n machdep.cpu.brand_string
-Intel(R) Core(TM) i7-4770HQ CPU @ 2.20GHz
+Runnable.run()  → executes inline on the CALLING thread — no new thread created
+Thread.start()  → JVM calls pthread_create(), new OS thread created, run() executes there
 ```
 
-[Introduction to Parallel Computing, Blaise Barney, Lawrence Livermore National Laboratory](https://computing.llnl.gov/tutorials/parallel_comp/)
+**References**
+- [Thread.State — Oracle docs (JDK 7)](https://docs.oracle.com/javase/7/docs/api/java/lang/Thread.State.html)
+- [sleep vs wait — stackoverflow](http://stackoverflow.com/q/1036754/432903)
+- [Runnable.run vs Thread.start — stackoverflow](http://stackoverflow.com/a/8579702/432903)
+- [LockSupport — Oracle docs](https://docs.oracle.com/en/java/javase/11/docs/api/java.base/java/util/concurrent/locks/LockSupport.html)
+- [What is BLOCKED vs WAITING? — stackoverflow](https://stackoverflow.com/a/51788005/432903)
+- [Monitor lock and synchronized — stackoverflow](https://stackoverflow.com/a/15680550/432903)
 
+---
+
+## 5. Thread Scheduling
+
+### Pre-emptive vs Co-operative
+
+```mermaid
+graph LR
+    subgraph Preemptive["Pre-emptive (default — Linux CFS, macOS)"]
+        P1["OS interrupts thread\nat any time (timer interrupt)"]
+        P2["Context switch forced\nby kernel scheduler"]
+        P3["Thread has no say\nin when it yields"]
+    end
+    subgraph Cooperative["Co-operative (Go goroutines, early JS, Python asyncio)"]
+        C1["Thread yields voluntarily\nat await/yield points"]
+        C2["No forced interruption"]
+        C3["Risk: starvation if\nthread never yields"]
+    end
 ```
 
-Load Balancing
+> **Staff+ insight:** Java uses pre-emptive scheduling (Linux CFS — Completely Fair Scheduler). Virtual threads use *cooperative* scheduling within the JVM — they yield at blocking points. This is why you must never do CPU-spin loops in virtual threads without yielding.
 
-Load balancing refers to the practice of distributing approximately 
-equal amounts of work among tasks so that all tasks are kept busy 
-all of the time.
+### Linux CFS (Completely Fair Scheduler)
 
-It can be considered a minimization of task idle time.
+- Tracks `vruntime` (virtual runtime) per task
+- Always picks the task with the lowest `vruntime`
+- Fair over time but not real-time
+- Java thread priority maps to `nice` values (-20 to +19)
 
-Load balancing is important to parallel programs for performance 
-reasons. 
-For example, if all tasks are subject to a barrier synchronization 
-point, the slowest task will determine the overall performance.
+### Loop Scheduling Strategies (OpenMP / parallel runtimes)
+
+| Strategy    | Allocation                                    | Overhead | Load Balance | Use When |
+|-------------|-----------------------------------------------|---|---|---|
+| **Static**  | Iterations pre-allocated before execution     | Low | Can be unbalanced | Uniform work per iteration |
+| **Dynamic** | Iterations assigned as threads complete       | Higher | Better balance | Variable work per iteration |
+| **Guided**  | Large chunks initially, shrinking dynamically | Medium | Good | Mixed workloads |
+
+**References**
+- [Thread scheduling — Wikipedia](https://en.wikipedia.org/wiki/Thread_(computing)#Scheduling)
+- [Pre-emptive vs co-operative multithreading — stackoverflow](https://stackoverflow.com/a/4147474/432903)
+- [Thread Execution Model — 3dgep.com](https://www.3dgep.com/cuda-thread-execution-model/)
+- [Static vs Dynamic scheduling — University of Washington](https://courses.cs.washington.edu/courses/cse471/02au/lectures/dyn1.pdf)
+- [OpenMP Scheduling Loops — UMW](http://cs.umw.edu/~finlayson/class/fall14/cpsc425/notes/12-scheduling.html)
+- [Static vs dynamic schedule in OpenMP — stackoverflow](http://stackoverflow.com/a/5864834/432903)
+
+---
+
+## 6. Java Memory Model (JMM)
+
+The JMM defines when writes by one thread are **visible** to reads by another. Without synchronization, the JVM/CPU is permitted to reorder reads and writes for performance.
+
+### Happens-Before Relationships
+
+A write **happens-before** a read if one of these holds:
+
+```mermaid
+graph TD
+    A["Thread A writes x=1"] -->|"happens-before"| B["Thread B reads x\n(guaranteed to see 1)"]
+
+    subgraph Guarantees["Happens-Before Rules"]
+        R1["Program order within a thread"]
+        R2["Monitor unlock → subsequent lock (synchronized)"]
+        R3["volatile write → subsequent volatile read"]
+        R4["Thread.start() → all actions in started thread"]
+        R5["All actions in thread → Thread.join() returns"]
+        R6["Object constructor end → finalizer start"]
+    end
 ```
 
-[MultiThreading](https://goo.gl/CCb2wa), HUM 07-2016, [SPLK 2018](https://www.glassdoor.com/Interview/Splunk-Interview-RVW23849616.htm), [MS](https://www.glassdoor.com/Interview/Microsoft-Interview-RVW21394032.htm)
---------------------------------------------------------
+### Reordering Hazards
 
+```java
+// Thread A
+result = compute();    // (1)
+ready = true;          // (2) — CPU may reorder (2) before (1)!
 
-[What is a multithreaded application, stackoverflow](http://stackoverflow.com/a/1313122/432903)
-
-```
-a single process can have many different "functions" executing concurrently, 
-allowing the app to better use the available hardware 
-(multiple cores/processors). 
-
-Threads can communicate between them (they have shared 
-memory), but its a hard problem to have every thread behave well 
-with others when accesing shared objects/memory.
+// Thread B
+if (ready) {
+    use(result);       // may see ready=true but result=0 !!
+}
 ```
 
-[1.3. Multithreading and Thread Synchronization](http://www.nakov.com/inetjava/lectures/part-1-sockets/InetJava-1.3-Multithreading.html)
-
-```
-multithreading is the ability of a CPU or a single core in a 
-multi-core processor to execute multiple processes 
-or threads concurrently, appropriately supported by the 
-operating system.
+**Fix with `volatile`:**
+```java
+volatile boolean ready = false;
+// volatile write establishes happens-before with subsequent volatile read
 ```
 
-[Thread Dead lock](https://en.wikipedia.org/wiki/Deadlock)
----------------------------------------------------
+### `volatile` vs `synchronized` vs `Atomic*`
 
-```
-In concurrent computing, a deadlock occurs when two 
-competing actions wait for the other to finish, 
-and thus neither ever does.
-```
+| Primitive | Guarantees | Use Case |
+|---|---|---|
+| `volatile` | Visibility + ordering (no atomicity for compound ops) | Single-writer flags, status fields |
+| `synchronized` | Mutual exclusion + visibility + ordering | Critical sections, condition signalling |
+| `AtomicInteger` etc. | Lock-free atomicity via CAS (Compare-And-Swap) | Counters, accumulators without full lock |
+| `VarHandle` (JDK 9+) | Fine-grained memory fence control | Library internals, off-heap access |
 
+**References**
+- [Java Memory Model — JSR-133](https://www.cs.umd.edu/~pugh/java/memoryModel/)
+- [Java Memory Model — Oracle docs](https://docs.oracle.com/javase/specs/jls/se21/html/jls-17.html#jls-17.4)
+- [java.util.concurrent — Oracle docs](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/util/concurrent/package-summary.html)
+- [In Java threading is supported at the language level — stackoverflow](http://stackoverflow.com/a/3306752/432903)
 
-[Deadlock example](http://stackoverflow.com/a/34520/432903), [SPLK, 2014](https://www.glassdoor.com/Interview/Splunk-Senior-Software-Engineer-Interview-Questions-EI_IE117313.0,6_KO7,31.htm#InterviewReview_3919244)
+---
 
-```
-Process1     ---> locks table1
-Process1 & 2 ---> want to process table2
-Process2     ---> wins lock on table2     <--- Process1 is waiting
-             ---> wants to process table1 <---- locked by Process1
-             ---> waits in table2
-```
+## 7. Synchronization Primitives & Hazards
 
-- when a `Thread` never gets CPU time or access to shared resources
+### Deadlock
 
-[CPU intensive vs IO intensive?](https://stackoverflow.com/a/868577/432903), AMZN, 2018
---------------------------------
+Occurs when thread A holds lock L1 and waits for L2, while thread B holds L2 and waits for L1.
 
-CPU bound
+```mermaid
+graph LR
+    A["Thread A\nholds Lock-1"] -->|"wants"| L2["Lock-2\nheld by Thread B"]
+    B["Thread B\nholds Lock-2"] -->|"wants"| L1["Lock-1\nheld by Thread A"]
 
-```
-A program is CPU bound if it would go faster if the CPU were faster, i.e. 
-it spends the majority of its time simply using the CPU (doing calculations). 
-
-eg. A program that computes new digits of π will typically be CPU-bound, it's just crunching numbers, 
-image processing, matrix multiplication
-
-* CPU bound processes spend more time doing computations, few very long CPU bursts.
-
-* CPU burst is when the process is being executed in the CPU
-
-https://www2.cs.uic.edu/~jbell/CourseNotes/OperatingSystems/6_CPU_Scheduling.html
+    style A fill:#B71C1C,color:#fff
+    style B fill:#1565C0,color:#fff
+    style L1 fill:#E65100,color:#fff
+    style L2 fill:#E65100,color:#fff
 ```
 
-[How to check if an API is CPU-bound?](https://stackoverflow.com/q/3156334/432903)
+**Prevention strategies:**
+1. **Lock ordering** — always acquire locks in a globally consistent order
+2. **Timeout** — `tryLock(timeout)` from `ReentrantLock`
+3. **Lock-free structures** — `ConcurrentHashMap`, `AtomicReference`
+4. **Single-lock design** — reduce lock granularity
 
-```
-Just run the application for some time on a dedicated machine and check the CPU counters. 
+### Livelock
 
-If the app uses 100% of the CPU core it can access, it's CPU bound. 
-Otherwise, it spends time on other things like memory allocations and IOs.
-```
+Threads are not blocked but keep reacting to each other, making no progress (e.g., two threads repeatedly backing off and retrying).
 
-IO bound
+### Starvation
 
-```
-A program is I/O bound if it would go faster if the I/O subsystem was faster. 
-Which exact I/O system is meant can vary; I typically associate it with disk. 
+A thread never gets CPU time because higher-priority or luckier threads always win the scheduler. Mitigated by fair locks: `new ReentrantLock(true)` (uses a FIFO queue).
 
-A program that looks through a huge file(eg. medical records file) for some data will often be I/O bound, 
-since the bottleneck is then the reading of the data from disk.
+### Priority Inversion
 
-* IO bound processes spend more time doing IO than computations, have many short CPU bursts.
-```
+High-priority thread H waits for lock held by low-priority thread L. Medium-priority thread M prevents L from running. Result: H is effectively demoted below M.
 
-- For I/O bound programs, it makes sense to have a thread give up CPU control 
-if it is waiting for an I/O operation to complete so that another thread can 
-get scheduled on the CPU and utilize CPU cycles.
+> **Real-world example:** Mars Pathfinder (1997) — priority inversion in VxWorks caused system resets. Fixed with priority inheritance.
 
-Thread per request vs [EventLoop](http://berb.github.io/diploma-thesis/original/055_events.html) vs [Event based Actor](https://stackoverflow.com/a/7458958/432903)
-----------------------------------
+### `synchronized` vs `ReentrantLock`
 
-[Why is Node.js single threaded?](http://stackoverflow.com/a/17959746/432903), [What the heck is EventLoop? - The JavaScript Event Loop: Explained](http://blog.carbonfive.com/2013/10/27/the-javascript-event-loop-explained/) sharethis, 2015
+| | `synchronized` | `ReentrantLock` |
+|---|---|---|
+| Interruptible wait | ❌ | ✅ `lockInterruptibly()` |
+| Timed try-lock | ❌ | ✅ `tryLock(n, unit)` |
+| Fair ordering | ❌ | ✅ `new ReentrantLock(true)` |
+| Multiple conditions | ❌ (one per object) | ✅ `lock.newCondition()` |
+| Virtual thread pinning | ✅ Pins carrier | ❌ Does NOT pin carrier |
+| Readability | Higher (implicit) | More explicit |
 
-https://developer.mozilla.org/en-US/docs/Web/JavaScript/EventLoop
+> **Staff+ rule:** Prefer `ReentrantLock` in any code that runs on virtual threads or needs non-trivial locking semantics. 
+> Use `synchronized` only for simple, short critical sections.
 
-https://en.wikipedia.org/wiki/Event_loop
+**References**
+- [Deadlock — Wikipedia](https://en.wikipedia.org/wiki/Deadlock)
+- [Deadlock example — stackoverflow](http://stackoverflow.com/a/34520/432903)
+- [Thread Deadlock — Oracle docs](https://docs.oracle.com/javase/tutorial/essential/concurrency/deadlock.html)
+- [Priority inversion — Wikipedia](https://en.wikipedia.org/wiki/Priority_inversion)
 
-```
-The event loop, message dispatcher, message loop, message pump, or run loop 
-is a programming construct that waits for and dispatches events or messages in a program.
-```
+---
 
-![](http://blog.carbonfive.com/wp-content/uploads/2013/10/event-loop.png)
+## 8. CPU-Bound vs I/O-Bound Work
 
-| Thread per request                                                                                                                                                 |   EL                                               |
-|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------|
-| The issue with the "one thread per request" model for a server is that they don't scale well for several scenarios compared to the event loop thread model.        | In the Event Loop model, the loop thread selects the next event (I/O finished) to handle. So the thread is always busy (if you program it correctly of course).|
-| Typically, in I/O intensive scenarios the requests spend most of the time waiting for I/O to complete.                                                             | The event loop model as all new things seems shiny and the solution for all issues but which model to use will depend on the scenario you need to tackle. If you have an intensive I/O scenario (like a proxy), the event base model will rule, whereas a CPU intensive scenario with a low number of concurrent processes will work best with the thread-based model.|
-| During this time, in the "one thread per request" model, the resources linked to the thread (such as memory) are unused and memory is the limiting factor.         | | 
-|                          | |
-|                            | |
+### CPU-Bound
 
-```
-In the real world most of the scenarios will be a bit in the middle. 
-You will need to balance the real need for scalability with the development 
-complexity to find the correct architecture 
-(e.g. have an event base front-end that 
-delegates to the backend for the CPU intensive tasks. 
-The front end will use little resources waiting for the task 
-result.)
-As with any distributed system it requires some effort to make it 
-work.
+> "A program is CPU-bound if it would go faster if the CPU were faster."
 
-If you are looking for the silver bullet that will fit with any 
-scenario without any effort, you will end up with a bullet in your foot.
+- Spends majority of time on computation: encryption, image processing, ML inference, matrix multiply, π digits
+- CPU bursts are long and few
+- **Thread pool sizing:** `N_cpu` threads = `Runtime.getRuntime().availableProcessors()`
+- More threads than cores → context-switch overhead, no gain
+- Virtual threads give **zero benefit** here
+
+```mermaid
+graph LR
+    T["CPU-Bound Task"] -->|"100% CPU"| C["CPU Core\n(always busy)"]
+    C -->|"no blocking"| T
+    style T fill:#B71C1C,color:#fff
+    style C fill:#1565C0,color:#fff
 ```
 
-[In Java, threading is supported at the language level with the synchronized and volatile keywords.](http://stackoverflow.com/a/3306752/432903)
+### I/O-Bound
 
-Parallelism
-------------
+> "A program is I/O-bound if it would go faster if the I/O subsystem were faster."
 
-see [../2-data-parallelism_fork_join/README.md](../2-data-parallelism_fork_join/README.md)
+- Spends majority of time waiting: DB queries, HTTP calls, disk reads, message queue polls
+- CPU bursts are short and many
+- **Thread pool sizing (platform):** `N_cpu × (1 + wait_time / compute_time)` — Little's Law
+- Virtual threads are purpose-built for this: unmount on every blocking point, carriers stay busy
 
-[2. Shared memory and distributed memory multiprocessor systems](https://edux.pjwstk.edu.pl/mat/264/lec/main119.html)
---
+```mermaid
+sequenceDiagram
+    participant T as Thread
+    participant CPU as CPU Core
+    participant IO as I/O Subsystem
 
-![](https://edux.pjwstk.edu.pl/mat/264/lec/ark16/Image8182.gif)
-
-
-https://docs.scala-lang.org/overviews/core/futures.html#the-global-execution-context
-
-- compile first to avoid CPU usage during compilation
-
-Sequential/ [Synchronous](https://en.wikipedia.org/wiki/Synchronous_programming_language)
-----------
-
-- Synchronous execution refers to line-by-line execution of code.
-- All the operations are handled by single thread (see in jmc or jvisualvm)
-
-```
-Thread Name	Thread State	Blocked Count	Blocked Time	Waited Count	Waited Time	Total CPU Usage(%)	Deadlocked	Lock Name	Lock Owner ID	Lock Owner Name	Thread Id	Native	Suspended	Allocated Bytes(bytes)
-run-main-0	TIMED_WAITING	3		66		-45,623,600	Not Enabled				60	0	0	-256,236
+    T->>CPU: compute (short burst)
+    CPU->>IO: blocking call (DB / network)
+    Note over CPU: CPU IDLE 💤 — wasted on platform thread
+    IO-->>CPU: response
+    CPU->>T: resume compute
 ```
 
-- number of process = 10
-- each process takes = 1 secs
-- total time = 11 secs
+### How to Diagnose
 
 ```bash
-$ gradle run blocking.SequentialSingleThreadedApp
+# CPU-bound: one or more cores pegged at 100%
+top -pid <PID>
+
+# I/O-bound: CPU mostly idle, high iowait
+iostat -x 1
+
+# JVM thread CPU usage
+jcmd <PID> Thread.print
+```
+
+**References**
+- [CPU intensive vs IO intensive? — stackoverflow](https://stackoverflow.com/a/868577/432903)
+- [How to check if an API is CPU-bound? — stackoverflow](https://stackoverflow.com/q/3156334/432903)
+- [CPU Scheduling — jbell CourseNotes](https://www2.cs.uic.edu/~jbell/CourseNotes/OperatingSystems/6_CPU_Scheduling.html)
+
+---
+
+## 9. Concurrency Models — Thread-per-Request vs Event Loop vs Virtual Threads
+
+```mermaid
+graph TD
+    subgraph TPR["Thread-per-Request (Tomcat, JDBC)"]
+        R1[Request 1] --> PT1[Platform Thread 1]
+        R2[Request 2] --> PT2[Platform Thread 2]
+        RN[Request N] --> PTN[Platform Thread N — pool exhausted!]
+    end
+
+    subgraph EL["Event Loop (Node.js, Netty, Vert.x)"]
+        EQ[Event Queue] --> Loop[Single Event Loop Thread]
+        Loop -->|non-blocking callback| CB1[Callback 1]
+        Loop -->|non-blocking callback| CB2[Callback 2]
+    end
+
+    subgraph VT["Virtual Thread-per-Request (Java 21 + Loom)"]
+        VR1[Request 1] --> VTH1[Virtual Thread 1]
+        VR2[Request 2] --> VTH2[Virtual Thread 2]
+        VRN[Request N] --> VTHN[Virtual Thread N — millions OK]
+        VTHN -->|unmounts on block| CT[Carrier Pool\n#cores threads]
+    end
+```
+
+| Model | Throughput (I/O) | Latency | Code Style | Complexity |
+|---|---|---|---|---|
+| Thread-per-Request (platform) | Limited by pool size | Low per-request | Imperative, simple | Low |
+| Event Loop (reactive) | Very high | Low | Callback / reactive chains | High (callback hell) |
+| Virtual Thread-per-Request | Very high | Low | Imperative, simple | Low |
+
+> **Staff+ verdict:** Java 21 virtual threads achieve event-loop-level throughput with thread-per-request simplicity. Reactive frameworks (Reactor, RxJava) solve the same problem with higher complexity — evaluate migration if your codebase is already reactive.
+
+**References**
+- [Why is Node.js single threaded? — stackoverflow](http://stackoverflow.com/a/17959746/432903)
+- [The JavaScript Event Loop: Explained — carbonfive.com](http://blog.carbonfive.com/2013/10/27/the-javascript-event-loop-explained/)
+- [Event loop — MDN Web Docs](https://developer.mozilla.org/en-US/docs/Web/JavaScript/EventLoop)
+- [Event loop — Wikipedia](https://en.wikipedia.org/wiki/Event_loop)
+- [Event-based Actor model — stackoverflow](https://stackoverflow.com/a/7458958/432903)
+
+---
+
+## 10. Platform Threads — Deep Dive
+
+### 1-to-1 Kernel Thread Mapping
+
+```mermaid
+graph TD
+    subgraph JVM["JVM Process"]
+        JT1["Platform Thread 1\n(java.lang.Thread)"]
+        JT2["Platform Thread 2"]
+        JTN["Platform Thread N"]
+    end
+    subgraph Kernel["OS Kernel"]
+        KT1["Kernel Thread\n(task_struct)"]
+        KT2["Kernel Thread"]
+        KTN["Kernel Thread"]
+    end
+    subgraph HW["Hardware"]
+        C1["CPU Core 1"]
+        C2["CPU Core 2"]
+    end
+
+    JT1 -->|pthread_create| KT1
+    JT2 -->|pthread_create| KT2
+    JTN -->|pthread_create| KTN
+    KT1 -->|CFS schedules| C1
+    KT2 -->|CFS schedules| C2
+    KTN -.->|waiting| C1
+
+    style JT1 fill:#2E7D32,color:#fff
+    style JT2 fill:#2E7D32,color:#fff
+    style JTN fill:#2E7D32,color:#fff
+    style KT1 fill:#6A1B9A,color:#fff
+    style KT2 fill:#6A1B9A,color:#fff
+    style KTN fill:#6A1B9A,color:#fff
+```
+
+### Cost Profile
+
+| Property | Value |
+|---|---|
+| Stack size | ~1 MB (native, off-heap) |
+| Creation time | ~1 ms (OS syscall) |
+| Context switch | ~1–10 µs (full register save/restore, possible TLB impact) |
+| Practical max | ~10,000 (memory + scheduler pressure) |
+| Blocking behaviour | OS thread parked — slot consumed, carrier wasted |
+
+### Blocking Under a Platform Thread
+
+```mermaid
+sequenceDiagram
+    participant App
+    participant PT as Platform Thread
+    participant OS as OS Kernel Thread
+    participant DB as Database
+
+    App->>PT: submit query task
+    PT->>OS: executing (mounted 1-to-1)
+    OS->>DB: JDBC blocking call
+    Note over OS: PARKED 💤 — kernel stack held<br/>thread slot consumed<br/>pool slot unavailable to other requests
+    DB-->>OS: result (500ms later)
+    OS-->>PT: resume
+    PT-->>App: return result
+```
+
+---
+
+## 11. Virtual Threads (Java 21) — Deep Dive
+
+See [`src/main/java/vthreads/README.md`](src/main/java/vthreads/README.md) for full internals, diagrams, and benchmark results.
+
+### Quick Summary
+
+```mermaid
+graph LR
+    subgraph VThreads["Millions of Virtual Threads (JVM heap ~KB each)"]
+        VT1["VT-1"] & VT2["VT-2"] & VT3["VT-3"] & VTN["VT-N …"]
+    end
+    JVMS["JVM Scheduler\nmount / unmount on blocking"]
+    subgraph Carriers["ForkJoinPool — #cores OS threads"]
+        C1["Carrier-1"] & C2["Carrier-2"] & CK["Carrier-K"]
+    end
+
+    VThreads --> JVMS --> Carriers
+
+    style JVMS fill:#E65100,color:#fff
+    style Carriers fill:#1565C0,color:#fff
+```
+
+### Benchmark Results (Java 21, Apple M-series, 10 cores)
+
+| Scenario | Platform Threads | Virtual Threads | Speedup |
+|---|---|---|---|
+| 100 tasks, 500ms block, pool=100 | 525 ms | 516 ms | 1.0× |
+| 1,000 tasks, 200ms block, pool=20 | 10,176 ms | 208 ms | **48.9×** |
+| 100,000 tasks, 50ms block, pool=200 | 26,536 ms | 370 ms | **71.7×** |
+
+### Creation API
+
+```java
+// Direct creation
+Thread vt = Thread.ofVirtual().name("order-processor").start(task);
+
+// Recommended: virtual-thread-per-task executor
+try (var exec = Executors.newVirtualThreadPerTaskExecutor()) {
+    exec.submit(task);
+} // auto shutdown + await
+
+// Spring Boot 3.2+ — enable globally
+@Bean
+TomcatProtocolHandlerCustomizer<?> virtualThreads() {
+    return h -> h.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
+}
+```
+
+### Pinning — The Critical Pitfall
+
+```java
+// ❌ Pins carrier — synchronized holds carrier even during blocking
+synchronized (this) {
+    dbCall(); // carrier thread blocked for full duration
+}
+
+// ✅ ReentrantLock allows unmount during blocking
+private final ReentrantLock lock = new ReentrantLock();
+lock.lock();
+try {
+    dbCall(); // carrier freed while waiting for DB
+} finally {
+    lock.unlock();
+}
+```
+
+> Detect pinning: `java -Djdk.tracePinnedThreads=full -jar app.jar`
+
+**References**
+- [JEP 444 — Virtual Threads (Java 21 GA)](https://openjdk.org/jeps/444)
+- [Virtual Threads deep dive — Inside Java](https://inside.java/2021/11/30/on-parallelism-and-concurrency/)
+- [Virtual Threads migration guide — Spring Blog](https://spring.io/blog/2022/10/11/embracing-virtual-threads)
+
+---
+
+## 12. Sequential vs Parallel Execution
+
+### Sequential — Single Threaded
+
+All work processed by one thread, one task at a time.
+
+```mermaid
+gantt
+    title Sequential Execution (10 tasks × 1s = 10s total)
+    dateFormat  X
+    axisFormat %s s
+
+    section Thread-main
+    Task 1 :0, 1
+    Task 2 :1, 2
+    Task 3 :2, 3
+    Task 4 :3, 4
+    Task 5 :4, 5
+    Task 6 :5, 6
+    Task 7 :6, 7
+    Task 8 :7, 8
+    Task 9 :8, 9
+    Task 10 :9, 10
+```
+
+```bash
+$ ./gradlew run -PmainClass=blocking.SequentialSingleThreadedApp
+
 [Thread-main] data data1 is processed.
-[Thread-main] data data2 is processed.
-[Thread-main] data data3 is processed.
-[Thread-main] data data4 is processed.
-[Thread-main] data data5 is processed.
-[Thread-main] data data6 is processed.
-[Thread-main] data data7 is processed.
-[Thread-main] data data8 is processed.
-[Thread-main] data data9 is processed.
+...
 [Thread-main] data data10 is processed.
 
 numberOfProcesses=10
-timeTakenMills=10074 ms
+timeTakenMills=10,074 ms
 ```
 
-for 100 tasks,
+### Parallel — Multi-Threaded
 
-```
-$ sbt "runMain SequentialSingleThreadedApp"
-[info] Running SequentialSingleThreadedApp
-[Thread-run-main-0] data data-1 is processed.
-[Thread-run-main-0] data data-2 is processed.
-[Thread-run-main-0] data data-3 is processed.
-[Thread-run-main-0] data data-4 is processed.
-[Thread-run-main-0] data data-5 is processed.
-[Thread-run-main-0] data data-6 is processed.
-[Thread-run-main-0] data data-7 is processed.
-[Thread-run-main-0] data data-8 is processed.
-[Thread-run-main-0] data data-9 is processed.
-[Thread-run-main-0] data data-10 is processed.
-[Thread-run-main-0] data data-11 is processed.
-[Thread-run-main-0] data data-12 is processed.
-[Thread-run-main-0] data data-13 is processed.
-[Thread-run-main-0] data data-14 is processed.
-[Thread-run-main-0] data data-15 is processed.
-[Thread-run-main-0] data data-16 is processed.
-[Thread-run-main-0] data data-17 is processed.
-[Thread-run-main-0] data data-18 is processed.
-[Thread-run-main-0] data data-19 is processed.
-[Thread-run-main-0] data data-20 is processed.
-[Thread-run-main-0] data data-21 is processed.
-[Thread-run-main-0] data data-22 is processed.
-[Thread-run-main-0] data data-23 is processed.
-[Thread-run-main-0] data data-24 is processed.
-[Thread-run-main-0] data data-25 is processed.
-[Thread-run-main-0] data data-26 is processed.
-[Thread-run-main-0] data data-27 is processed.
-[Thread-run-main-0] data data-28 is processed.
-[Thread-run-main-0] data data-29 is processed.
-[Thread-run-main-0] data data-30 is processed.
-[Thread-run-main-0] data data-31 is processed.
-[Thread-run-main-0] data data-32 is processed.
-[Thread-run-main-0] data data-33 is processed.
-[Thread-run-main-0] data data-34 is processed.
-[Thread-run-main-0] data data-35 is processed.
-[Thread-run-main-0] data data-36 is processed.
-[Thread-run-main-0] data data-37 is processed.
-[Thread-run-main-0] data data-38 is processed.
-[Thread-run-main-0] data data-39 is processed.
-[Thread-run-main-0] data data-40 is processed.
-[Thread-run-main-0] data data-41 is processed.
-[Thread-run-main-0] data data-42 is processed.
-[Thread-run-main-0] data data-43 is processed.
-[Thread-run-main-0] data data-44 is processed.
-[Thread-run-main-0] data data-45 is processed.
-[Thread-run-main-0] data data-46 is processed.
-[Thread-run-main-0] data data-47 is processed.
-[Thread-run-main-0] data data-48 is processed.
-[Thread-run-main-0] data data-49 is processed.
-[Thread-run-main-0] data data-50 is processed.
-[Thread-run-main-0] data data-51 is processed.
-[Thread-run-main-0] data data-52 is processed.
-[Thread-run-main-0] data data-53 is processed.
-[Thread-run-main-0] data data-54 is processed.
-[Thread-run-main-0] data data-55 is processed.
-[Thread-run-main-0] data data-56 is processed.
-[Thread-run-main-0] data data-57 is processed.
-[Thread-run-main-0] data data-58 is processed.
-[Thread-run-main-0] data data-59 is processed.
-[Thread-run-main-0] data data-60 is processed.
-[Thread-run-main-0] data data-61 is processed.
-[Thread-run-main-0] data data-62 is processed.
-[Thread-run-main-0] data data-63 is processed.
-[Thread-run-main-0] data data-64 is processed.
-[Thread-run-main-0] data data-65 is processed.
-[Thread-run-main-0] data data-66 is processed.
-[Thread-run-main-0] data data-67 is processed.
-[Thread-run-main-0] data data-68 is processed.
-[Thread-run-main-0] data data-69 is processed.
-[Thread-run-main-0] data data-70 is processed.
-[Thread-run-main-0] data data-71 is processed.
-[Thread-run-main-0] data data-72 is processed.
-[Thread-run-main-0] data data-73 is processed.
-[Thread-run-main-0] data data-74 is processed.
-[Thread-run-main-0] data data-75 is processed.
-[Thread-run-main-0] data data-76 is processed.
-[Thread-run-main-0] data data-77 is processed.
-[Thread-run-main-0] data data-78 is processed.
-[Thread-run-main-0] data data-79 is processed.
-[Thread-run-main-0] data data-80 is processed.
-[Thread-run-main-0] data data-81 is processed.
-[Thread-run-main-0] data data-82 is processed.
-[Thread-run-main-0] data data-83 is processed.
-[Thread-run-main-0] data data-84 is processed.
-[Thread-run-main-0] data data-85 is processed.
-[Thread-run-main-0] data data-86 is processed.
-[Thread-run-main-0] data data-87 is processed.
-[Thread-run-main-0] data data-88 is processed.
-[Thread-run-main-0] data data-89 is processed.
-[Thread-run-main-0] data data-90 is processed.
-[Thread-run-main-0] data data-91 is processed.
-[Thread-run-main-0] data data-92 is processed.
-[Thread-run-main-0] data data-93 is processed.
-[Thread-run-main-0] data data-94 is processed.
-[Thread-run-main-0] data data-95 is processed.
-[Thread-run-main-0] data data-96 is processed.
-[Thread-run-main-0] data data-97 is processed.
-[Thread-run-main-0] data data-98 is processed.
-[Thread-run-main-0] data data-99 is processed.
-[success] Total time: 100 s, completed Apr 1, 2018 2:23:18 AM
+Tasks distributed across a thread pool, executing concurrently.
+
+```mermaid
+gantt
+    title Parallel Execution (10 tasks × 1s, 4 threads ≈ 3s total)
+    dateFormat  X
+    axisFormat %s s
+
+    section Thread-1
+    Task 1 :0, 1
+    Task 5 :1, 2
+    Task 9 :2, 3
+
+    section Thread-2
+    Task 2 :0, 1
+    Task 6 :1, 2
+    Task 10 :2, 3
+
+    section Thread-3
+    Task 3 :0, 1
+    Task 7 :1, 2
+
+    section Thread-4
+    Task 4 :0, 1
+    Task 8 :1, 2
 ```
 
-![](sequential.png)
+### Load Balancing
 
-Parallelism
------------------------------------------------------------------------------
+> "Load balancing refers to the practice of distributing approximately equal amounts of work among tasks so that all tasks are kept busy all of the time. The slowest task at a barrier synchronization determines overall performance." — Lawrence Livermore National Laboratory
 
-[](../2-data-parallelism_fork_join/README.md)
+**Amdahl's Law** — theoretical speedup limit:
+
+```
+Speedup = 1 / (S + (1 - S) / N)
+
+S = serial fraction of the program
+N = number of parallel threads/processors
+
+If 20% of your program is serial:
+  N=4  → max 2.5×
+  N=∞  → max 5×       (not 4× or ∞×!)
+```
+
+**References**
+- [Introduction to Parallel Computing — Lawrence Livermore National Laboratory](https://computing.llnl.gov/tutorials/parallel_comp/)
+- [Shared memory and distributed memory multiprocessor systems](https://edux.pjwstk.edu.pl/mat/264/lec/main119.html)
+- [Scala Futures and the Global ExecutionContext](https://docs.scala-lang.org/overviews/core/futures.html#the-global-execution-context)
+
+---
+
+## 13. Hardware — Hyper-Threading & Clock Rate
+
+### Hyper-Threading (Intel SMT)
+
+A single physical core presents **2 logical CPUs** to the OS. 
+Both logical cores share the same execution units but have independent register sets and program counters.
+
+```bash
+sysctl -a | grep hw
+#hw.physicalcpu:     4     # physical cores
+#hw.logicalcpu:      8     # logical cores (HT enabled)
+#hw.memsize:   17179869184
+```
+
+```mermaid
+graph TD
+    subgraph Core["Physical CPU Core"]
+        EU["Execution Units\n(ALU, FPU, Load/Store)"]
+        LC1["Logical CPU 0\n(own PC + registers)"]
+        LC2["Logical CPU 1\n(own PC + registers)"]
+    end
+
+    LC1 -->|shares| EU
+    LC2 -->|shares| EU
+
+    OS["OS Scheduler"] --> LC1
+    OS --> LC2
+
+    style EU fill:#B71C1C,color:#fff
+    style LC1 fill:#2E7D32,color:#fff
+    style LC2 fill:#1565C0,color:#fff
+```
+
+> **Staff+ implication:** `availableProcessors()` returns logical CPUs. For CPU-bound work, a pool sized to *physical* cores may outperform one sized to logical cores if workload is compute-dense (avoids resource contention on shared execution units).
+
+### Clock Rate
+
+The frequency at which the CPU executes clock cycles, measured in Hz (GHz).
+
+```bash
+sysctl -n machdep.cpu.brand_string
+#Apple M3 Pro
+```
+
+> Modern CPUs use **dynamic frequency scaling** (Turbo Boost / Boost): cores run faster when thermal/power budget allows, 
+> and slower under sustained load or thermal throttling. 
+> This is why microbenchmarks must warm up the JVM *and* let the CPU reach steady-state frequency.
+
+**References**
+- [Hyper-threading technology — Wikipedia](https://en.wikipedia.org/wiki/Hyper-threading)
+- [Clock rate — Wikipedia](https://en.wikipedia.org/wiki/Clock_rate)
+
+---
+
+## 14. Production Patterns & Anti-Patterns
+
+### Thread Pool Sizing
+
+| Workload                     | Formula                                               | Example                      |
+|------------------------------|-------------------------------------------------------|------------------------------|
+| CPU-bound                    | `N_cpu` (= `availableProcessors()`)                   | Image encoding pipeline      |
+| I/O-bound (platform threads) | `N_cpu × (1 + W/C)` where W=wait time, C=compute time | DB query handlers            |
+| I/O-bound (virtual threads)  | Unbounded — `newVirtualThreadPerTaskExecutor()`       | REST handlers, gRPC services |
+
+### User vs Daemon Threads
+
+- **User threads** keep the JVM alive (e.g., `main` thread, request-handling threads)
+- **Daemon threads** are killed when all user threads finish (e.g., GC, background monitors)
+
+```java
+Thread monitor = new Thread(this::pollMetrics);
+monitor.setDaemon(true);   // JVM won't wait for this thread on shutdown
+monitor.start();
+```
+
+### Graceful Interruption
+
+```java
+// Never swallow InterruptedException
+try {
+    Thread.sleep(1000);
+} catch (InterruptedException e) {
+    Thread.currentThread().interrupt(); // restore interrupt flag
+    throw new RuntimeException("Task interrupted", e);
+}
+```
+
+See [`src/main/java/blocking/GracefulInterruptionExample.java`](src/main/java/blocking/GracefulInterruptionExample.java)
+
+### Deprecated Thread Primitives
+
+| Method             | Why Deprecated                                     | Alternative                                     |
+|--------------------|----------------------------------------------------|-------------------------------------------------|
+| `Thread.stop()`    | Unlocks all monitors — leaves shared state corrupt | Cooperative interruption via `interrupt()` flag |
+| `Thread.suspend()` | Holds locks while suspended — deadlock-prone       | `wait()` / `LockSupport.park()`                 |
+| `Thread.resume()`  | Only meaningful with `suspend()`                   | `notify()` / `LockSupport.unpark()`             |
+
+### Anti-Patterns
+
+| Anti-Pattern                                  | Problem                                                                 | Fix                                                              |
+|-----------------------------------------------|-------------------------------------------------------------------------|------------------------------------------------------------------|
+| Unbounded platform thread creation            | OOM from stack allocation                                               | Use `ExecutorService` with bounded pool                          |
+| `synchronized` + long I/O                     | Pins carrier in virtual threads; reduces throughput in platform threads | Use `ReentrantLock`, move I/O outside critical section           |
+| Large `ThreadLocal` caches on virtual threads | Millions of VTs × cache size = heap OOM                                 | Use `ScopedValue`, or scope the `ThreadLocal` narrowly           |
+| `Thread.sleep()` for coordination             | Brittle, wastes time, misses notify                                     | Use `Condition.await()` / `CountDownLatch` / `CompletableFuture` |
+| Ignoring `InterruptedException`               | Thread never stops cleanly                                              | Always restore interrupt flag or rethrow                         |
+| Pool sized by guess                           | Under/over provisioning                                                 | Profile with `async-profiler`, tune with Little's Law            |
+
+---
+
+## Running the Examples
+
+```bash
+# Sequential single-threaded
+./gradlew run -PmainClass=blocking.SequentialSingleThreadedApp
+
+# Virtual thread demos
+./gradlew run -PmainClass=vthreads.VirtualThreadExample
+
+# Platform vs virtual thread benchmark
+./gradlew run -PmainClass=vthreads.ThreadComparison
+```
+
+## Further Reading
+
+- [JEP 444 — Virtual Threads (Java 21 GA)](https://openjdk.org/jeps/444)
+- [Java Memory Model — JSR-133](https://www.cs.umd.edu/~pugh/java/memoryModel/)
+- [Linux CFS Scheduler](https://www.kernel.org/doc/html/latest/scheduler/sched-design-CFS.html)
+- [Amdahl's Law — LLNL Parallel Computing Tutorial](https://computing.llnl.gov/tutorials/parallel_comp/)
+- [POSIX Threads Programming](https://hpc-tutorials.llnl.gov/posix/)
+- [Java Concurrency in Practice — Goetz et al.](https://jcip.net/)
+- [The Art of Multiprocessor Programming — Herlihy & Shavit](https://www.elsevier.com/books/the-art-of-multiprocessor-programming/herlihy/978-0-12-397337-5)
